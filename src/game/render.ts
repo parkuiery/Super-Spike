@@ -16,15 +16,26 @@ import {
   CHAR_W,
   POINTS_TO_WIN_SET,
   SETS_TO_WIN_MATCH,
+  type Palette,
 } from "./config";
 import { clamp } from "../engine/math";
+
+/** hex "#rrggbb" -> "rgba(r,g,b,a)". */
+function hexA(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
 
 export class Renderer {
   private t = 0;
 
   constructor(private ctx: CanvasRenderingContext2D) {}
 
-  drawWorld(world: World, realDt: number) {
+  /** World content — drawn inside the camera transform (shake + zoom punch). */
+  drawScene(world: World, realDt: number) {
     this.t += realDt;
     const ctx = this.ctx;
 
@@ -43,10 +54,15 @@ export class Renderer {
     this.drawBall(world.ball);
 
     world.particles.render(ctx);
+    world.effects.renderShockwaves(ctx);
     this.drawTimingRing(world);
     if (world.phase === "serve" || world.phase === "ready") this.drawServeIndicator(world);
-    this.drawHUD(world);
     world.effects.renderPopups(ctx);
+  }
+
+  /** Screen-fixed overlay — HUD (unaffected by camera). */
+  drawOverlay(world: World) {
+    this.drawHUD(world);
   }
 
   private drawServeIndicator(world: World) {
@@ -79,19 +95,36 @@ export class Renderer {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, VIEW_W, FLOOR_Y);
 
-    // ceiling lights
+    // spotlight cones (additive glow) + fixtures
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     for (let i = 0; i < 4; i++) {
-      const x = 140 + i * 230;
-      ctx.fillStyle = "rgba(180,200,255,0.10)";
+      const x = 200 + i * 200;
+      const sway = Math.sin(this.t * 0.6 + i) * 22;
+      const lg = ctx.createLinearGradient(x, CEIL_Y, x + sway, 320);
+      lg.addColorStop(0, "rgba(150,180,255,0.18)");
+      lg.addColorStop(1, "rgba(150,180,255,0)");
+      ctx.fillStyle = lg;
       ctx.beginPath();
-      ctx.moveTo(x, CEIL_Y - 10);
-      ctx.lineTo(x + 120, CEIL_Y - 10);
-      ctx.lineTo(x + 180, 190);
-      ctx.lineTo(x - 60, 190);
+      ctx.moveTo(x - 16, CEIL_Y - 6);
+      ctx.lineTo(x + 16, CEIL_Y - 6);
+      ctx.lineTo(x + 150 + sway, 330);
+      ctx.lineTo(x - 150 + sway, 330);
       ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = "#e9f0ff";
-      ctx.fillRect(x, CEIL_Y - 16, 120, 10);
+    }
+    ctx.restore();
+    // fixtures
+    for (let i = 0; i < 4; i++) {
+      const x = 200 + i * 200;
+      ctx.fillStyle = "#0e1428";
+      ctx.fillRect(x - 40, CEIL_Y - 18, 80, 7);
+      ctx.fillStyle = "#fdfbe6";
+      for (let k = 0; k < 3; k++) {
+        ctx.beginPath();
+        ctx.arc(x - 26 + k * 26, CEIL_Y - 14, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // crowd stands
@@ -121,6 +154,25 @@ export class Renderer {
       ctx.lineTo(x - 40, VIEW_H);
       ctx.stroke();
     }
+    // glossy sheen streaks (spotlight reflections on the polished floor)
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < 4; i++) {
+      const x = 200 + i * 200;
+      const sway = Math.sin(this.t * 0.6 + i) * 22;
+      const sg = ctx.createLinearGradient(x + sway, FLOOR_Y, x + sway, VIEW_H);
+      sg.addColorStop(0, "rgba(255,240,200,0.10)");
+      sg.addColorStop(1, "rgba(255,240,200,0)");
+      ctx.fillStyle = sg;
+      ctx.beginPath();
+      ctx.moveTo(x - 24 + sway, FLOOR_Y);
+      ctx.lineTo(x + 24 + sway, FLOOR_Y);
+      ctx.lineTo(x + 60 + sway, VIEW_H);
+      ctx.lineTo(x - 60 + sway, VIEW_H);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
     // court boundary lines
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 4;
@@ -141,23 +193,51 @@ export class Renderer {
 
   private drawCrowd() {
     const ctx = this.ctx;
-    const colors = ["#ff6b6b", "#ffd93d", "#6bcB77", "#4d96ff", "#c77dff", "#ff9f45"];
+    const colors = ["#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff", "#c77dff", "#ff9f45"];
     ctx.save();
     for (let row = 0; row < 3; row++) {
-      const y = 200 + row * 22;
-      for (let x = 30; x < VIEW_W - 20; x += 26) {
-        const bob = Math.sin(this.t * 3 + x * 0.3 + row) * 2;
+      const y = 196 + row * 22;
+      for (let x = 30; x < VIEW_W - 20; x += 24) {
+        // a wave travels across the stands (mexican wave)
+        const wavePhase = this.t * 2.4 - x * 0.012;
+        const wave = Math.max(0, Math.sin(wavePhase)) ** 2;
+        const bob = wave * 9 + Math.sin(this.t * 3 + x) * 1.5;
         ctx.fillStyle = colors[(x + row) % colors.length];
-        ctx.globalAlpha = 0.55 - row * 0.1;
+        ctx.globalAlpha = 0.6 - row * 0.12;
+        // body
         ctx.beginPath();
-        ctx.arc(x + (row % 2) * 12, y + bob, 6, 0, Math.PI * 2);
+        ctx.arc(x + (row % 2) * 12, y - bob, 6, 0, Math.PI * 2);
         ctx.fill();
+        // raised arms at wave peak
+        if (wave > 0.5 && row === 0) {
+          ctx.strokeStyle = ctx.fillStyle;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x - 4, y - bob - 4);
+          ctx.lineTo(x - 7, y - bob - 12);
+          ctx.moveTo(x + 4, y - bob - 4);
+          ctx.lineTo(x + 7, y - bob - 12);
+          ctx.stroke();
+        }
       }
     }
     ctx.globalAlpha = 1;
-    // stand base
-    ctx.fillStyle = "rgba(10,14,28,0.7)";
-    ctx.fillRect(0, 262, VIEW_W, 30);
+    // occasional camera flashes in the crowd
+    for (let i = 0; i < 5; i++) {
+      const fx = ((i * 191 + Math.floor(this.t * 3) * 137) % VIEW_W);
+      const flick = (Math.sin(this.t * 20 + i * 5) + 1) / 2;
+      if (flick > 0.88) {
+        ctx.fillStyle = `rgba(255,255,255,${(flick - 0.88) * 6})`;
+        ctx.beginPath();
+        ctx.arc(fx, 200 + (i % 3) * 22, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // stand base rail
+    ctx.fillStyle = "rgba(10,14,28,0.75)";
+    ctx.fillRect(0, 260, VIEW_W, 30);
+    ctx.fillStyle = "rgba(120,150,220,0.25)";
+    ctx.fillRect(0, 260, VIEW_W, 3);
     ctx.restore();
   }
 
@@ -229,133 +309,243 @@ export class Renderer {
   }
 
   // ------------------------------------------------------------- fighter
+  /** A 2-segment limb with a bent joint (elbow/knee). */
+  private limb(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    bend: number,
+    width: number,
+    upper: string,
+    lower: string,
+  ) {
+    const ctx = this.ctx;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = Math.hypot(dx, dy) || 1;
+    const mx = (x0 + x1) / 2;
+    const my = (y0 + y1) / 2;
+    const px = -dy / len;
+    const py = dx / len;
+    const kx = mx + px * bend * len;
+    const ky = my + py * bend * len;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = upper;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(kx, ky);
+    ctx.stroke();
+    ctx.strokeStyle = lower;
+    ctx.lineWidth = width * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(kx, ky);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  }
+
+  private drawShoe(x: number, y: number, face: number, color: string) {
+    const ctx = this.ctx;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(x + face * 3, y - 1, 8, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(x - 6, y + 2, 15, 2);
+  }
+
+  private drawHair(p: Palette, hx: number, hy: number, face: number) {
+    const ctx = this.ctx;
+    // back hair
+    ctx.fillStyle = p.hairShade;
+    ctx.beginPath();
+    ctx.arc(hx, hy - 2, 17, 0, Math.PI * 2);
+    ctx.fill();
+    // crown
+    ctx.fillStyle = p.hair;
+    ctx.beginPath();
+    ctx.arc(hx, hy - 3, 15.5, Math.PI, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(hx - 15.5, hy - 5, 31, 6);
+
+    if (p.style === "spiky") {
+      ctx.beginPath();
+      for (let i = -2; i <= 2; i++) {
+        const bx = hx + i * 6;
+        ctx.moveTo(bx - 4, hy - 7);
+        ctx.lineTo(bx, hy + 2);
+        ctx.lineTo(bx + 4, hy - 7);
+      }
+      for (let i = -2; i <= 2; i++) {
+        const bx = hx + i * 7;
+        ctx.moveTo(bx - 4, hy - 9);
+        ctx.lineTo(bx + face * 3, hy - 24);
+        ctx.lineTo(bx + 4, hy - 9);
+      }
+      ctx.fill();
+    } else if (p.style === "ponytail") {
+      ctx.beginPath();
+      ctx.arc(hx, hy - 4, 15.5, Math.PI, 0);
+      ctx.fill();
+      // ponytail trailing behind (opposite the facing side)
+      ctx.beginPath();
+      ctx.ellipse(hx - face * 19, hy - 4, 8, 17, face * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = p.trim;
+      ctx.beginPath();
+      ctx.arc(hx - face * 11, hy - 8, 3, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (p.style === "swept") {
+      ctx.beginPath();
+      ctx.moveTo(hx - 15, hy - 3);
+      ctx.quadraticCurveTo(hx + face * 20, hy - 18, hx + face * 17, hy + 5);
+      ctx.quadraticCurveTo(hx + face * 4, hy - 4, hx - 15, hy - 2);
+      ctx.fill();
+    } else {
+      // mohawk crest
+      ctx.beginPath();
+      for (let i = -2; i <= 2; i++) {
+        const bx = hx + i * 4;
+        ctx.moveTo(bx - 3, hy - 7);
+        ctx.lineTo(bx, hy - 26 + Math.abs(i) * 3);
+        ctx.lineTo(bx + 3, hy - 7);
+      }
+      ctx.fill();
+      ctx.fillStyle = p.skin;
+      ctx.beginPath();
+      ctx.arc(hx - 11, hy - 2, 5, 0, Math.PI * 2);
+      ctx.arc(hx + 11, hy - 2, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // highlight streak
+    ctx.strokeStyle = p.hairLight;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(hx + face * 4, hy - 4, 11, -Math.PI * 0.85, -Math.PI * 0.3);
+    ctx.stroke();
+  }
+
   private drawFighter(f: Fighter, isAI: boolean) {
     const ctx = this.ctx;
     const p = f.palette;
+    const face = f.facing;
+    const airborne = !f.onGround;
+    const swing = f.swing;
+    const spiking = airborne && (swing > 0.05 || f.holdHit);
+
     ctx.save();
-
-    let cx = f.x;
     let cy = f.y;
-    let tilt = 0;
     if (f.celebrate > 0) cy -= Math.abs(Math.sin(this.t * 12)) * 10;
-    if (f.stunned > 0) tilt = Math.sin(this.t * 20) * 0.08;
-
-    ctx.translate(cx, cy);
-    ctx.rotate(tilt);
+    ctx.translate(f.x, cy);
+    if (f.stunned > 0) ctx.rotate(Math.sin(this.t * 20) * 0.08);
     const sy = f.squash;
     const sx = 1 + (1 - f.squash) * 0.55;
     ctx.scale(sx, sy);
 
-    const face = f.facing; // -1 or 1
-    const swing = f.swing;
-    const airborne = !f.onGround;
+    // spike aura behind the body
+    if (spiking) {
+      const glow = Math.min(1, swing + 0.4);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const ag = ctx.createRadialGradient(0, -50, 4, 0, -50, 74);
+      ag.addColorStop(0, hexA(p.accent, 0.5 * glow));
+      ag.addColorStop(1, hexA(p.accent, 0));
+      ctx.fillStyle = ag;
+      ctx.beginPath();
+      ctx.arc(0, -50, 74, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
 
-    // --- legs ---
-    const hipY = -38;
-    const legSpread = 10;
-    const run = Math.sin(f.legPhase) * (f.onGround ? 8 : 3);
-    ctx.strokeStyle = p.shorts;
-    ctx.lineWidth = 11;
-    ctx.lineCap = "round";
-    // back leg
-    ctx.strokeStyle = p.skinShade;
-    ctx.beginPath();
-    ctx.moveTo(-legSpread, hipY);
-    ctx.lineTo(-legSpread - run * 0.5, airborne ? hipY + 34 : 0);
-    ctx.stroke();
-    // front leg
-    ctx.strokeStyle = p.skin;
-    ctx.beginPath();
-    ctx.moveTo(legSpread, hipY);
-    ctx.lineTo(legSpread + run * 0.5, airborne ? hipY + 30 : 0);
-    ctx.stroke();
-    // shorts
-    ctx.fillStyle = p.shorts;
-    this.roundRect(-16, hipY - 6, 32, 20, 8);
-    ctx.fill();
+    const hipY = -40;
+    const shoulderY = -74;
+    const headY = -96;
+    const spread = 9;
 
-    // --- torso (jersey) ---
-    const shoulderY = -70;
-    ctx.fillStyle = p.jersey;
-    this.roundRect(-17, shoulderY, 34, hipY - shoulderY + 12, 12);
+    // ---- legs ----
+    const run = Math.sin(f.legPhase);
+    let flX: number, flY: number, blX: number, blY: number;
+    if (airborne) {
+      flX = spread + face * 6;
+      flY = hipY + (spiking ? 22 : 34);
+      blX = -spread - face * 2;
+      blY = hipY + (spiking ? 30 : 40);
+    } else {
+      flX = spread + run * 11;
+      flY = 0;
+      blX = -spread - run * 11;
+      blY = 0;
+    }
+    this.limb(-spread * 0.5, hipY, blX, blY, face * 0.28, 13, p.shorts, p.skinShade);
+    this.drawShoe(blX, blY, face, p.shoe);
+    this.limb(spread * 0.5, hipY, flX, flY, face * 0.28, 13, p.shorts, p.skin);
+    this.drawShoe(flX, flY, face, p.shoe);
+
+    // ---- torso ----
+    const tg = ctx.createLinearGradient(0, shoulderY, 0, hipY + 6);
+    tg.addColorStop(0, p.jersey);
+    tg.addColorStop(1, p.jerseyShade);
+    ctx.fillStyle = tg;
+    this.roundRect(-18, shoulderY, 36, hipY - shoulderY + 12, 12);
     ctx.fill();
-    // shade
-    ctx.fillStyle = p.jerseyShade;
-    this.roundRect(-17, shoulderY + 18, 34, hipY - shoulderY - 6, 8);
+    // rim light on the facing edge
+    ctx.fillStyle = hexA(p.trim, 0.25);
+    this.roundRect(face > 0 ? 11 : -18, shoulderY + 2, 7, hipY - shoulderY + 6, 5);
     ctx.fill();
-    // trim stripe
+    // collar
     ctx.fillStyle = p.trim;
-    ctx.fillRect(-17, shoulderY + 12, 34, 4);
-    // jersey number
-    ctx.fillStyle = p.trim;
-    ctx.font = "12px Bungee, sans-serif";
+    ctx.fillRect(-18, shoulderY + 12, 36, 4);
+    // number
+    ctx.font = "13px Bungee, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(f.number), 0, shoulderY + 26);
+    ctx.fillText(String(f.number), 0, shoulderY + 30);
 
-    // --- arms ---
-    ctx.lineWidth = 9;
-    ctx.lineCap = "round";
-    // hitting arm (front, toward net = face direction)
-    const swingAngle = airborne
-      ? -Math.PI * 0.62 + swing * Math.PI * 0.7 // overhead swing down for spike
-      : -Math.PI * 0.15 - swing * Math.PI * 0.5;
-    const armLen = 30;
-    const ax = face * 12;
-    const ay = shoulderY + 6;
-    const hxp = ax + Math.cos(swingAngle) * face * armLen;
-    const hyp = ay + Math.sin(swingAngle) * armLen - (airborne ? 6 : 0);
-    ctx.strokeStyle = p.skin;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(hxp, hyp);
-    ctx.stroke();
-    // hand
+    // ---- back arm ----
+    const shFront = 13 * face;
+    const shBack = -13 * face;
+    const backHandY = f.celebrate > 0 ? shoulderY - 28 : shoulderY + (airborne ? 30 : 24);
+    const backHandX = shBack - face * (f.celebrate > 0 ? 6 : 10);
+    this.limb(shBack, shoulderY + 4, backHandX, backHandY, -face * 0.3, 8, p.skinShade, p.skinShade);
+
+    // ---- hitting arm ----
+    const armAngle = airborne
+      ? -Math.PI * 0.72 + swing * Math.PI * 0.85
+      : -Math.PI * 0.12 - swing * Math.PI * 0.55;
+    const armReach = 32;
+    const handX = shFront + Math.cos(armAngle) * face * armReach;
+    const handY = shoulderY + 4 + Math.sin(armAngle) * armReach;
+    this.limb(shFront, shoulderY + 4, handX, handY, face * 0.28, 8.5, p.skin, p.skin);
     ctx.fillStyle = p.skin;
     ctx.beginPath();
-    ctx.arc(hxp, hyp, 5.5, 0, Math.PI * 2);
+    ctx.arc(handX, handY, 6, 0, Math.PI * 2);
     ctx.fill();
-    // back arm
-    ctx.strokeStyle = p.skinShade;
-    ctx.beginPath();
-    ctx.moveTo(-face * 12, ay);
-    ctx.lineTo(-face * 16, ay + (f.celebrate > 0 ? -26 : 22));
-    ctx.stroke();
 
-    // --- head ---
-    const headY = shoulderY - 15;
-    const headX = face * 3;
-    // hair back
-    ctx.fillStyle = p.hairShade;
-    ctx.beginPath();
-    ctx.arc(headX, headY, 17, 0, Math.PI * 2);
-    ctx.fill();
-    // face
+    // ---- neck + head ----
+    ctx.fillStyle = p.skinShade;
+    ctx.fillRect(-5, shoulderY - 8, 10, 12);
+    const hx2 = face * 3;
     ctx.fillStyle = p.skin;
     ctx.beginPath();
-    ctx.arc(headX, headY, 15, 0, Math.PI * 2);
+    ctx.arc(hx2, headY, 15, 0, Math.PI * 2);
     ctx.fill();
-    // hair top
-    ctx.fillStyle = p.hair;
+    // cheek shade
+    ctx.fillStyle = hexA(p.skinShade, 0.55);
     ctx.beginPath();
-    ctx.arc(headX, headY - 3, 15, Math.PI, Math.PI * 2);
+    ctx.arc(hx2 - face * 8, headY + 3, 8, 0, Math.PI * 2);
     ctx.fill();
-    // spiky bangs
+    this.drawHair(p, hx2, headY, face);
+    this.drawFace(hx2, headY, face, f);
+    // rim light on head
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    for (let i = -2; i <= 2; i++) {
-      const bx = headX + i * 6;
-      ctx.moveTo(bx - 4, headY - 6);
-      ctx.lineTo(bx, headY + 3);
-      ctx.lineTo(bx + 4, headY - 6);
-    }
-    ctx.fill();
-
-    // face expression
-    this.drawFace(headX, headY, face, f);
+    ctx.arc(hx2, headY, 15, face > 0 ? -1.1 : Math.PI + 0.1, face > 0 ? -0.1 : Math.PI + 1.1);
+    ctx.stroke();
 
     ctx.restore();
 
-    // celebration sparkles / stun stars (unscaled overlay)
     if (f.celebrate > 0) this.drawSparkles(f.x, f.y - CHAR_H - 6);
     if (isAI && f.stunned > 0) this.drawStunStars(f.x, f.y - CHAR_H);
   }
@@ -438,25 +628,43 @@ export class Renderer {
   // ------------------------------------------------------------- ball
   private drawBall(b: Ball) {
     const ctx = this.ctx;
-    // trail
+    const hot = b.hot > 0;
+    // energy comet trail (additive glow)
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     for (let i = 0; i < b.trail.length; i++) {
       const tp = b.trail[i];
-      const a = tp.a * 0.5;
-      if (a < 0.03) continue;
+      const f = i / b.trail.length;
+      const a = tp.a * (hot ? 0.6 : 0.32);
+      if (a < 0.02) continue;
       ctx.globalAlpha = a;
-      ctx.fillStyle = b.hot > 0 ? "#ff8a3d" : "#9fb4ff";
+      const rr = BALL_R * (0.35 + f * 0.85) * (hot ? 1.25 : 1);
+      const gg = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, rr);
+      if (hot) {
+        gg.addColorStop(0, "rgba(255,235,150,1)");
+        gg.addColorStop(0.5, "rgba(255,140,50,0.8)");
+        gg.addColorStop(1, "rgba(255,60,20,0)");
+      } else {
+        gg.addColorStop(0, "rgba(180,205,255,0.9)");
+        gg.addColorStop(1, "rgba(90,130,255,0)");
+      }
+      ctx.fillStyle = gg;
       ctx.beginPath();
-      ctx.arc(tp.x, tp.y, BALL_R * (0.3 + (i / b.trail.length) * 0.7), 0, Math.PI * 2);
+      ctx.arc(tp.x, tp.y, rr, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
     ctx.globalAlpha = 1;
 
-    if (b.hot > 0) {
+    if (hot) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      ctx.fillStyle = `rgba(255,140,60,${0.5 * b.hot})`;
+      const gh = ctx.createRadialGradient(b.x, b.y, 2, b.x, b.y, BALL_R + 14);
+      gh.addColorStop(0, `rgba(255,220,120,${0.7 * b.hot})`);
+      gh.addColorStop(1, "rgba(255,120,40,0)");
+      ctx.fillStyle = gh;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, BALL_R + 8, 0, Math.PI * 2);
+      ctx.arc(b.x, b.y, BALL_R + 14, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }

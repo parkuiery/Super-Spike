@@ -163,13 +163,23 @@ class Game {
     };
     world.update(dt, intent);
 
-    // draw with screen shake
+    // draw world with screen shake + zoom punch, then screen-fixed overlays
     const shake = world.effects.shakeOffset();
     this.ctx.save();
     this.ctx.translate(shake.x, shake.y);
-    this.renderer.drawWorld(world, dt);
+    const z = world.effects.zoom;
+    if (z !== 1) {
+      const fx = world.effects.zoomFocusX;
+      const fy = world.effects.zoomFocusY;
+      this.ctx.translate(fx, fy);
+      this.ctx.scale(z, z);
+      this.ctx.translate(-fx, -fy);
+    }
+    this.renderer.drawScene(world, dt);
     this.ctx.restore();
+    world.effects.renderSpeedLines(this.ctx, VIEW_W, VIEW_H);
     world.effects.renderFlash(this.ctx, VIEW_W, VIEW_H);
+    this.renderer.drawOverlay(world);
 
     // controls hint early on
     if (this.time < 9999 && world.sets[0] + world.sets[1] === 0 && world.points[0] + world.points[1] === 0) {
@@ -195,7 +205,8 @@ class Game {
   private updatePaused() {
     // draw frozen world underneath
     if (this.world) {
-      this.renderer.drawWorld(this.world, 0);
+      this.renderer.drawScene(this.world, 0);
+      this.renderer.drawOverlay(this.world);
     }
     drawPause(this.ctx);
     if (this.input.pressed("Escape", "KeyP", "Enter")) {

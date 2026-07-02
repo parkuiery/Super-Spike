@@ -435,11 +435,14 @@ export class World {
     const hy = this.ball.y;
     switch (kind) {
       case "spike": {
-        this.ball.hot = 0.9;
+        this.ball.hot = perfect ? 1.2 : 0.9;
         audio.play("spike", perfect ? 1.2 : 1);
-        this.effects.shake(perfect ? 18 : 12, 0.35);
-        this.effects.freeze(perfect ? 0.07 : 0.04);
-        this.effects.flash(perfect ? "#fff2b0" : "#ffffff", perfect ? 0.5 : 0.28);
+        this.effects.shake(perfect ? 20 : 13, 0.35);
+        this.effects.freeze(perfect ? 0.08 : 0.045);
+        this.effects.flash(perfect ? "#fff2b0" : "#ffffff", perfect ? 0.55 : 0.3);
+        this.effects.shockwave(hx, hy, perfect ? "#ffe14d" : "#ffd24d", perfect ? 200 : 150, perfect ? 10 : 6);
+        this.effects.punch(perfect ? 1.12 : 1.06, hx, hy);
+        this.effects.speedLines(perfect ? 0.3 : 0.18, hx, hy, perfect ? "#fff2b0" : "#ffffff");
         if (perfect) {
           this.effects.slow(0.16, 0.32);
           audio.play("perfect");
@@ -460,10 +463,13 @@ export class World {
       }
       case "block":
         audio.play("block");
-        this.effects.shake(14, 0.3);
-        this.effects.freeze(0.05);
+        this.effects.shake(15, 0.3);
+        this.effects.freeze(0.06);
+        this.effects.flash("#bfefff", 0.22);
+        this.effects.shockwave(hx, hy, "#6fd3ff", 140, 7);
+        this.effects.punch(1.05, hx, hy);
         this.effects.popup("BLOCK!", hx, hy - 50, "#6fd3ff");
-        this.particles.burst(hx, hy, 14, { color: ["#6fd3ff", "#fff"], speed: [150, 360], shape: "spark", life: [0.2, 0.5] });
+        this.particles.burst(hx, hy, 16, { color: ["#6fd3ff", "#fff"], speed: [150, 380], shape: "spark", life: [0.2, 0.5] });
         break;
       case "set":
         audio.play("set");

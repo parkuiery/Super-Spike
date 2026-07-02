@@ -55,15 +55,21 @@ export const WIN_BY_TWO = true;
 
 export type Side = -1 | 1; // -1 = left (player), 1 = right (AI)
 
+export type HairStyle = "spiky" | "ponytail" | "swept" | "mohawk";
+
 export interface Palette {
   skin: string;
   skinShade: string;
   hair: string;
   hairShade: string;
+  hairLight: string; // hair highlight
   jersey: string;
   jerseyShade: string;
   trim: string;
   shorts: string;
+  shoe: string;
+  accent: string; // aura / signature color for effects
+  style: HairStyle;
   name: string;
 }
 
@@ -72,10 +78,14 @@ export const PLAYER_PALETTE: Palette = {
   skinShade: "#e8ad78",
   hair: "#2b2f4a",
   hairShade: "#1c1f33",
+  hairLight: "#4a5688",
   jersey: "#3b7dff",
   jerseyShade: "#2456c7",
   trim: "#eaf1ff",
   shorts: "#1b2b52",
+  shoe: "#f5f7ff",
+  accent: "#6fd3ff",
+  style: "spiky",
   name: "YOU",
 };
 
@@ -85,10 +95,14 @@ export const AI_PALETTES: Palette[] = [
     skinShade: "#eab98a",
     hair: "#b23a48",
     hairShade: "#83232f",
+    hairLight: "#e0616f",
     jersey: "#ff5252",
     jerseyShade: "#c62828",
     trim: "#fff0f0",
     shorts: "#4a1414",
+    shoe: "#2a2a2a",
+    accent: "#ff7a4d",
+    style: "mohawk",
     name: "BLAZE",
   },
   {
@@ -96,10 +110,14 @@ export const AI_PALETTES: Palette[] = [
     skinShade: "#d6a274",
     hair: "#2e7d32",
     hairShade: "#1b5e20",
+    hairLight: "#57b85c",
     jersey: "#26c281",
     jerseyShade: "#159c63",
     trim: "#e9fff5",
     shorts: "#0f3d2b",
+    shoe: "#ffffff",
+    accent: "#5affc0",
+    style: "ponytail",
     name: "IVY",
   },
   {
@@ -107,10 +125,14 @@ export const AI_PALETTES: Palette[] = [
     skinShade: "#c89468",
     hair: "#6a1b9a",
     hairShade: "#4a148c",
+    hairLight: "#9d4bd0",
     jersey: "#ab47bc",
     jerseyShade: "#7b1fa2",
     trim: "#f7e9ff",
     shorts: "#3b1147",
+    shoe: "#1a1a1a",
+    accent: "#d17aff",
+    style: "swept",
     name: "NOVA",
   },
 ];

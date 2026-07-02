@@ -1,4 +1,5 @@
 import { randRange, easeOutCubic } from "../engine/math";
+import { VIEW_W, VIEW_H } from "./config";
 
 interface Popup {
   text: string;
@@ -10,6 +11,17 @@ interface Popup {
   color: string;
   scale: number;
   big: boolean;
+}
+
+interface Shock {
+  x: number;
+  y: number;
+  r: number;
+  maxR: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  width: number;
 }
 
 /**
@@ -25,7 +37,32 @@ export class Effects {
   slowmoScale = 1;
   flashColor = "#fff";
   flashAlpha = 0;
+  zoom = 1;
+  zoomFocusX = VIEW_W / 2;
+  zoomFocusY = VIEW_H / 2;
   private popups: Popup[] = [];
+  private shocks: Shock[] = [];
+  private speedTime = 0;
+  private speedMax = 0.001;
+  private speedX = VIEW_W / 2;
+  private speedY = VIEW_H / 2;
+  private speedColor = "#ffffff";
+
+  shockwave(x: number, y: number, color = "#ffffff", maxR = 130, width = 6) {
+    this.shocks.push({ x, y, r: 10, maxR, life: 0.42, maxLife: 0.42, color, width });
+  }
+  punch(zoom: number, x: number, y: number) {
+    this.zoom = Math.max(this.zoom, zoom);
+    this.zoomFocusX = x;
+    this.zoomFocusY = y;
+  }
+  speedLines(sec: number, x: number, y: number, color = "#ffffff") {
+    this.speedTime = sec;
+    this.speedMax = sec;
+    this.speedX = x;
+    this.speedY = y;
+    this.speedColor = color;
+  }
 
   shake(mag: number, dur = 0.3) {
     if (mag > this.shakeMag) {
@@ -79,6 +116,15 @@ export class Effects {
       if (this.shakeTime <= 0) this.shakeMag = 0;
     }
     this.flashAlpha = Math.max(0, this.flashAlpha - realDt * 3);
+    this.zoom += (1 - this.zoom) * Math.min(1, realDt * 6);
+    if (this.zoom < 1.002) this.zoom = 1;
+    if (this.speedTime > 0) this.speedTime -= realDt;
+    for (let i = this.shocks.length - 1; i >= 0; i--) {
+      const s = this.shocks[i];
+      s.life -= realDt;
+      s.r += (s.maxR - s.r) * Math.min(1, realDt * 9);
+      if (s.life <= 0) this.shocks.splice(i, 1);
+    }
     for (let i = this.popups.length - 1; i >= 0; i--) {
       const p = this.popups[i];
       p.life -= realDt;
@@ -94,6 +140,50 @@ export class Effects {
     if (this.shakeMag <= 0) return { x: 0, y: 0 };
     const k = (this.shakeTime / this.shakeDur) * this.shakeMag;
     return { x: randRange(-k, k), y: randRange(-k, k) };
+  }
+
+  /** Expanding shock rings — drawn in world space (under screen shake). */
+  renderShockwaves(ctx: CanvasRenderingContext2D) {
+    if (!this.shocks.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const s of this.shocks) {
+      const t = s.life / s.maxLife;
+      ctx.globalAlpha = t * 0.8;
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width * t;
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y, s.r, s.r * 0.7, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  /** Manga-style radial speed lines — drawn as a screen overlay. */
+  renderSpeedLines(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    if (this.speedTime <= 0) return;
+    const t = this.speedTime / this.speedMax; // 1 -> 0
+    const alpha = easeOutCubic(Math.min(1, t)) * 0.5;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = this.speedColor;
+    const cx = this.speedX;
+    const cy = this.speedY;
+    const inner = Math.max(w, h) * (0.28 + (1 - t) * 0.5);
+    const outer = Math.max(w, h) * 1.2;
+    const N = 46;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2 + i * 0.3;
+      const jitter = ((i * 37) % 11) / 11;
+      ctx.lineWidth = 2 + jitter * 5;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.lineTo(cx + Math.cos(a) * outer, cy + Math.sin(a) * outer);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   renderFlash(ctx: CanvasRenderingContext2D, w: number, h: number) {
@@ -131,6 +221,9 @@ export class Effects {
     this.hitstop = 0;
     this.slowmo = 0;
     this.flashAlpha = 0;
+    this.zoom = 1;
+    this.speedTime = 0;
     this.popups.length = 0;
+    this.shocks.length = 0;
   }
 }

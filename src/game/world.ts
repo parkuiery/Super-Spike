@@ -368,7 +368,13 @@ export class World {
     let vy = 0;
     let perfect = false;
 
-    if (isBlock) {
+    if (serveHit) {
+      // Dedicated serve: a strong high arc that clears the net from the back
+      // court and lands in the opponent's half (volleyball serve rules).
+      kind = "serve";
+      vx = opponentDir * randRange(430, 500);
+      vy = -randRange(820, 890);
+    } else if (isBlock) {
       kind = "block";
       vx = opponentDir * randRange(480, 660) * rallyBoost;
       vy = randRange(360, 520);

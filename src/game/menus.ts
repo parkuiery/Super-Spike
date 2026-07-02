@@ -183,7 +183,7 @@ export function drawControls(ctx: Ctx) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(
-    "WASD 코트 이동(W=전진) · SPACE 점프 · J 리시브/토스/스파이크 · 공 근처 아군 자동 조종(🟢) · 네트에서 J유지=블록",
+    "WASD 코트 이동 · SPACE 점프 · J 리시브/토스/스파이크 · 공 근처 아군 자동 조종(🟢) · 네트에서 J유지=블록",
     VIEW_W / 2,
     VIEW_H - 46,
   );

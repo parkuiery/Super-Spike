@@ -16,7 +16,7 @@ import {
   type Palette,
 } from "./config";
 
-const CHAR_K = 0.52; // world-height to screen scale for character billboards
+const CHAR_K = 0.9; // world-height to screen scale for character billboards
 const ATTACK = 130; // attack-line distance from the net (world z)
 
 function hexA(hex: string, a: number): string {
@@ -43,14 +43,14 @@ export class Renderer {
     this.drawShadow(world.ball.x, world.ball.z, world.ball.y, BALL_R);
     this.drawActiveMarker(world.activeFighter);
 
-    // depth-sorted draw list (players + ball + net), far first
-    type Item = { z: number; draw: () => void };
+    // depth-sorted draw list (players + ball + net), far first (larger x = farther)
+    type Item = { d: number; draw: () => void };
     const items: Item[] = [];
-    for (const f of world.playerTeam) items.push({ z: f.z, draw: () => this.drawFighter(f) });
-    for (const f of world.aiTeam) items.push({ z: f.z, draw: () => this.drawFighter(f) });
-    items.push({ z: world.ball.z, draw: () => this.drawBall(world.ball) });
-    items.push({ z: NET_Z, draw: () => this.drawNet() });
-    items.sort((a, b) => b.z - a.z);
+    for (const f of world.playerTeam) items.push({ d: f.x, draw: () => this.drawFighter(f) });
+    for (const f of world.aiTeam) items.push({ d: f.x, draw: () => this.drawFighter(f) });
+    items.push({ d: world.ball.x, draw: () => this.drawBall(world.ball) });
+    items.push({ d: COURT_W / 2, draw: () => this.drawNet() });
+    items.sort((a, b) => b.d - a.d);
     for (const it of items) it.draw();
 
     world.particles.render(ctx);
@@ -101,7 +101,7 @@ export class Renderer {
 
   private drawStands() {
     const ctx = this.ctx;
-    const far = project(COURT_W / 2, 0, COURT_L).sy; // ~ top of court
+    const far = project(COURT_W, 0, COURT_L / 2).sy; // ~ top of court (far sideline)
     // stand backdrop
     ctx.fillStyle = "rgba(8,12,26,0.6)";
     ctx.fillRect(0, 30, VIEW_W, far - 20);
@@ -133,9 +133,11 @@ export class Renderer {
     const nr = this.courtCorner(COURT_W, 0);
     const fr = this.courtCorner(COURT_W, COURT_L);
     const fl = this.courtCorner(0, COURT_L);
+    const topY = Math.min(nl.y, nr.y, fr.y, fl.y);
+    const botY = Math.max(nl.y, nr.y, fr.y, fl.y);
 
     // court surface
-    const cg = ctx.createLinearGradient(0, fl.y, 0, nl.y);
+    const cg = ctx.createLinearGradient(0, topY, 0, botY);
     cg.addColorStop(0, "#2f6fb0");
     cg.addColorStop(1, "#3f86c9");
     ctx.fillStyle = cg;
@@ -158,11 +160,11 @@ export class Renderer {
     for (let i = 0; i < 4; i++) {
       const x = 200 + i * 200;
       const sway = Math.sin(this.t * 0.6 + i) * 24;
-      const sg = ctx.createLinearGradient(x + sway, fl.y, x + sway, nl.y);
+      const sg = ctx.createLinearGradient(x + sway, topY, x + sway, botY);
       sg.addColorStop(0, "rgba(200,225,255,0.10)");
       sg.addColorStop(1, "rgba(200,225,255,0)");
       ctx.fillStyle = sg;
-      ctx.fillRect(x - 90 + sway, fl.y, 180, nl.y - fl.y);
+      ctx.fillRect(x - 90 + sway, topY, 180, botY - topY);
     }
     ctx.restore();
 

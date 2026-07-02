@@ -156,8 +156,9 @@ class Game {
     }
 
     const intent = {
-      moveX: this.input.moveX,
-      moveZ: this.input.moveZ,
+      // A/D moves along the horizontal net axis (z); W/S moves in depth (x)
+      moveX: this.input.moveZ,
+      moveZ: this.input.moveX,
       jump: this.input.jumpPressed(),
       hit: this.input.hitPressed(),
       hitHeld: this.input.hitHeld(),

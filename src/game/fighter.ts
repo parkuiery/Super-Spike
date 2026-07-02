@@ -66,6 +66,7 @@ export class Fighter {
     this.z = h.z;
     this.aiTargetX = h.x;
     this.aiTargetZ = h.z;
+    this.facing = side === -1 ? 1 : -1; // face the net (net is horizontal centre on screen)
   }
 
   get bodyTopY() {
@@ -118,7 +119,8 @@ export class Fighter {
     const accel = MOVE_ACCEL * (this.onGround ? 1 : AIR_CONTROL);
     this.vx = approach(this.vx, mx * MOVE_SPEED, accel * dt);
     this.vz = approach(this.vz, mz * MOVE_SPEED, accel * dt);
-    if (Math.abs(mx) > 0.1) this.facing = mx < 0 ? -1 : 1;
+    // sprite faces along the horizontal (net) axis = z movement
+    if (Math.abs(mz) > 0.1) this.facing = mz < 0 ? -1 : 1;
 
     if (intent.jump && this.onGround && !frozen) {
       this.vy = JUMP_V;

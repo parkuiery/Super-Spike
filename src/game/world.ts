@@ -21,7 +21,6 @@ import {
   TEAM_SIZE,
   homePos,
   ROLE_SETTER,
-  ROLE_SPIKER,
   POINTS_TO_WIN_SET,
   SETS_TO_WIN_MATCH,
   WIN_BY_TWO,
@@ -399,16 +398,26 @@ export class World {
       vx *= rallyBoost;
       vz *= rallyBoost;
     } else {
-      // receive / set — loft the ball toward a teammate so a DIFFERENT player plays next.
-      const isSet = sideTouches >= 1;
-      kind = isSet ? "set" : "bump";
-      const mate = this.teammate(f, isSet ? ROLE_SPIKER : ROLE_SETTER);
-      // aim at the mate but keep it well on our own side and give it airtime to arrive
-      const tx = clamp(mate.x + aimX * 40, 30, COURT_W - 30);
-      const zLo = f.side === -1 ? 30 : NET_Z + 30;
-      const zHi = f.side === -1 ? NET_Z - 30 : COURT_L - 30;
-      const tz = clamp(mate.z, zLo, zHi);
-      ({ vx, vy, vz } = this.solveTo(tx, tz, isSet ? 0.95 : 1.05));
+      // A front-court player (near the net) sends it OVER; a back player digs it
+      // up to a teammate. This means the ball goes over whenever a front player
+      // plays it — no need to force a full 3-touch combo (but max is still 3).
+      const front = Math.abs(f.z - NET_Z) < 150;
+      if (front || mustGoOver) {
+        kind = "attack";
+        const tx = clamp(f.x + aimX * 110, 40, COURT_W - 40);
+        ({ vx, vy, vz } = this.solveTo(tx, farCourtZ(), 1.0));
+        vx *= rallyBoost;
+        vz *= rallyBoost;
+      } else {
+        // back-court dig/set — loft it to the setter up front so a teammate attacks
+        kind = sideTouches >= 1 ? "set" : "bump";
+        const mate = this.teammate(f, ROLE_SETTER);
+        const tx = clamp(mate.x + aimX * 40, 30, COURT_W - 30);
+        const zLo = f.side === -1 ? 30 : NET_Z + 30;
+        const zHi = f.side === -1 ? NET_Z - 30 : COURT_L - 30;
+        const tz = clamp(mate.z, zLo, zHi);
+        ({ vx, vy, vz } = this.solveTo(tx, tz, 1.0));
+      }
     }
 
     // nudge out of the body a touch

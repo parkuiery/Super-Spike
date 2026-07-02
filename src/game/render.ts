@@ -29,8 +29,24 @@ function hexA(hex: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+/** Smoothed limb/body pose so animation transitions blend instead of snapping. */
+interface Pose {
+  flX: number;
+  flY: number;
+  blX: number;
+  blY: number;
+  hNx: number;
+  hNy: number;
+  hFx: number;
+  hFy: number;
+  lower: number;
+  lean: number;
+}
+
 export class Renderer {
   private t = 0;
+  // smoothed animation pose per fighter, so state changes blend instead of snapping
+  private anims = new WeakMap<Fighter, Pose>();
   constructor(private ctx: CanvasRenderingContext2D) {}
 
   drawScene(world: World, realDt: number) {
@@ -48,8 +64,8 @@ export class Renderer {
     // depth-sorted draw list (players + ball + net), far first (larger x = farther)
     type Item = { d: number; draw: () => void };
     const items: Item[] = [];
-    for (const f of world.playerTeam) items.push({ d: f.x, draw: () => this.drawFighter(f, world.ball) });
-    for (const f of world.aiTeam) items.push({ d: f.x, draw: () => this.drawFighter(f, world.ball) });
+    for (const f of world.playerTeam) items.push({ d: f.x, draw: () => this.drawFighter(f, world.ball, realDt) });
+    for (const f of world.aiTeam) items.push({ d: f.x, draw: () => this.drawFighter(f, world.ball, realDt) });
     items.push({ d: world.ball.x, draw: () => this.drawBall(world.ball) });
     items.push({ d: COURT_W / 2, draw: () => this.drawNet() });
     items.sort((a, b) => b.d - a.d);
@@ -376,7 +392,7 @@ export class Renderer {
     ctx.fill();
   }
 
-  private drawFighter(f: Fighter, ball: Ball) {
+  private drawFighter(f: Fighter, ball: Ball, realDt: number) {
     const ctx = this.ctx;
     const p = f.palette;
     const face = f.facing;
@@ -392,7 +408,113 @@ export class Renderer {
     const ready = !airborne && ballLive && !moving && !acting && f.celebrate <= 0 && f.stunned <= 0;
     const spiking = airborne && (swing > 0.05 || f.holdHit || kind === "spike" || kind === "attack");
     const ballDirZ = Math.sign(ball.z - f.z) || face;
+    const spread = 9;
 
+    // ================= TARGET pose (before smoothing) =================
+    const tLower = ready ? 6 + breath * 1.2 : moving ? 3 : kind === "bump" && acting ? 5 : 0;
+    const hipY = -40 + tLower;
+    const shoulderY = -74 + tLower;
+    const headY = -96 + tLower;
+
+    // legs
+    let tflX: number, tflY: number, tblX: number, tblY: number;
+    if (airborne) {
+      if (spiking) {
+        tflX = spread + face * 8; tflY = hipY + 20;
+        tblX = -spread; tblY = hipY + 32;
+      } else {
+        tflX = spread + face * 4; tflY = hipY + 30;
+        tblX = -spread - face * 2; tblY = hipY + 38;
+      }
+    } else if (moving) {
+      const s = Math.sin(f.legPhase);
+      tflX = spread + s * 13; tflY = -Math.max(0, s) * 7;
+      tblX = -spread - s * 13; tblY = -Math.max(0, -s) * 7;
+    } else {
+      const w = ready ? spread + 3 : spread;
+      tflX = w; tflY = 0;
+      tblX = -w; tblY = 0;
+    }
+
+    // arms
+    const shN = 13 * face;
+    const shF = -13 * face;
+    let tHNx: number, tHNy: number, tHFx: number, tHFy: number;
+    if (f.stunned > 0) {
+      tHNx = shN + face * 2; tHNy = shoulderY + 42;
+      tHFx = shF - face * 2; tHFy = shoulderY + 44;
+    } else if (f.celebrate > 0) {
+      const pump = Math.abs(Math.sin(this.t * 12)) * 10;
+      tHNx = shN + face * 4; tHNy = headY - 16 - pump;
+      tHFx = shF - face * 4; tHFy = headY - 16 - pump;
+    } else if (airborne && (kind === "spike" || kind === "attack" || (spiking && !f.holdHit))) {
+      const strike = swing; // 1 at contact, decays -> arm returns to windup
+      tHNx = lerp(shN + face * 6, shN + face * 34, strike);
+      tHNy = lerp(headY - 28, shoulderY + 18, strike);
+      tHFx = shF - face * 16; tHFy = shoulderY + 2;
+    } else if (airborne && (kind === "block" || f.holdHit)) {
+      tHNx = shN + face * 2; tHNy = headY - 30;
+      tHFx = shF - face * 2; tHFy = headY - 30;
+    } else if (airborne) {
+      tHNx = shN + face * 6; tHNy = headY - 20;
+      tHFx = shF + face * 2; tHFy = headY - 14;
+    } else if (acting && kind === "set") {
+      const s = swing;
+      tHNx = shN + face * 2; tHNy = headY - 12 - s * 5;
+      tHFx = shF - face * 2; tHFy = headY - 12 - s * 5;
+    } else if (acting && kind === "serve") {
+      const s = swing;
+      tHNx = shN + face * (10 + s * 22); tHNy = headY - 24 + s * 34;
+      tHFx = shF - face * 6; tHFy = shoulderY + 18;
+    } else if (acting) {
+      const s = swing;
+      const px = face * (18 + s * 12);
+      const py = shoulderY + 34 - s * 8;
+      tHNx = px; tHNy = py;
+      tHFx = px - face * 3; tHFy = py + 2;
+    } else if (moving) {
+      const sw = Math.sin(f.legPhase);
+      tHNx = shN + face * 8 + sw * 10; tHNy = shoulderY + 26 - Math.abs(sw) * 2;
+      tHFx = shF - face * 8 - sw * 10; tHFy = shoulderY + 26 - Math.abs(sw) * 2;
+    } else if (ready) {
+      const b = breath * 1.5;
+      tHNx = shN + face * 16; tHNy = shoulderY + 26 + b;
+      tHFx = shF + face * 10; tHFy = shoulderY + 28 - b;
+    } else {
+      const b = breath * 2;
+      tHNx = shN + face * 3; tHNy = shoulderY + 34 + b;
+      tHFx = shF - face * 3; tHFy = shoulderY + 34 - b;
+    }
+
+    let tLean = clamp(f.vz / MOVE_SPEED, -1, 1) * 0.14;
+    if (acting && (kind === "bump" || kind === "serve")) tLean += face * 0.12;
+    else if (ready) tLean += ballDirZ * 0.05;
+    if (airborne) tLean *= 0.4;
+    if (f.stunned > 0) tLean = Math.sin(this.t * 20) * 0.14 + face * 0.08;
+
+    // ================= smooth current pose toward target =================
+    let a = this.anims.get(f);
+    if (!a) {
+      a = { flX: tflX, flY: tflY, blX: tblX, blY: tblY, hNx: tHNx, hNy: tHNy, hFx: tHFx, hFy: tHFy, lower: tLower, lean: tLean };
+      this.anims.set(f, a);
+    } else {
+      const kLimb = 1 - Math.exp(-24 * realDt); // limbs: snappy but never popping
+      const kBody = 1 - Math.exp(-13 * realDt); // weight shifts: smoother
+      a.flX = lerp(a.flX, tflX, kLimb); a.flY = lerp(a.flY, tflY, kLimb);
+      a.blX = lerp(a.blX, tblX, kLimb); a.blY = lerp(a.blY, tblY, kLimb);
+      a.hNx = lerp(a.hNx, tHNx, kLimb); a.hNy = lerp(a.hNy, tHNy, kLimb);
+      a.hFx = lerp(a.hFx, tHFx, kLimb); a.hFy = lerp(a.hFy, tHFy, kLimb);
+      a.lower = lerp(a.lower, tLower, kBody);
+      a.lean = lerp(a.lean, tLean, kBody);
+    }
+
+    // resolved (smoothed) values
+    const sHipY = -40 + a.lower;
+    const sShoulderY = -74 + a.lower;
+    const sHeadY = -96 + a.lower;
+    const shY = sShoulderY + 4;
+
+    // ================= draw =================
     const feet = project(f.x, f.y, f.z);
     const sc = feet.s * CHAR_K;
     const celebLift = f.celebrate > 0 ? Math.abs(Math.sin(this.t * 12)) * 12 : 0;
@@ -402,7 +524,6 @@ export class Renderer {
     const sqx = 1 + (1 - f.squash) * 0.55;
     ctx.scale(sc * sqx, sc * f.squash);
 
-    // spike aura
     if (spiking) {
       const glow = Math.min(1, swing + 0.4);
       ctx.save();
@@ -417,144 +538,49 @@ export class Renderer {
       ctx.restore();
     }
 
-    // ---- crouch / body height ----
-    const lower = ready ? 6 + breath * 1.2 : moving ? 3 : kind === "bump" && acting ? 5 : 0;
-    const hipY = -40 + lower;
-    const shoulderY = -74 + lower;
-    const headY = -96 + lower;
-    const spread = 9;
+    // legs
+    this.limb(-spread * 0.5, sHipY, a.blX, a.blY, face * 0.28, 13, p.shorts, p.skinShade);
+    this.drawShoe(a.blX, a.blY, face, p.shoe);
+    this.limb(spread * 0.5, sHipY, a.flX, a.flY, face * 0.28, 13, p.shorts, p.skin);
+    this.drawShoe(a.flX, a.flY, face, p.shoe);
 
-    // ---- legs (absolute, hip -> feet) ----
-    let flX: number, flY: number, blX: number, blY: number;
-    if (airborne) {
-      if (spiking) {
-        flX = spread + face * 8;
-        flY = hipY + 20;
-        blX = -spread;
-        blY = hipY + 32;
-      } else {
-        flX = spread + face * 4;
-        flY = hipY + 30;
-        blX = -spread - face * 2;
-        blY = hipY + 38;
-      }
-    } else if (moving) {
-      const s = Math.sin(f.legPhase);
-      flX = spread + s * 13;
-      flY = -Math.max(0, s) * 7;
-      blX = -spread - s * 13;
-      blY = -Math.max(0, -s) * 7;
-    } else {
-      const w = ready ? spread + 3 : spread;
-      flX = w;
-      flY = 0;
-      blX = -w;
-      blY = 0;
-    }
-    this.limb(-spread * 0.5, hipY, blX, blY, face * 0.28, 13, p.shorts, p.skinShade);
-    this.drawShoe(blX, blY, face, p.shoe);
-    this.limb(spread * 0.5, hipY, flX, flY, face * 0.28, 13, p.shorts, p.skin);
-    this.drawShoe(flX, flY, face, p.shoe);
-
-    // ---- arm targets (near = front/face side, far = back) ----
-    const shN = 13 * face;
-    const shF = -13 * face;
-    const shY = shoulderY + 4;
-    let hNx: number, hNy: number, hFx: number, hFy: number;
-    if (f.stunned > 0) {
-      hNx = shN + face * 2; hNy = shoulderY + 42;
-      hFx = shF - face * 2; hFy = shoulderY + 44;
-    } else if (f.celebrate > 0) {
-      const pump = Math.abs(Math.sin(this.t * 12)) * 10;
-      hNx = shN + face * 4; hNy = headY - 16 - pump;
-      hFx = shF - face * 4; hFy = headY - 16 - pump;
-    } else if (airborne && (kind === "spike" || kind === "attack" || (spiking && !f.holdHit))) {
-      const strike = swing; // 1 at contact, decays -> arm returns to windup
-      hNx = lerp(shN + face * 6, shN + face * 34, strike);
-      hNy = lerp(headY - 28, shoulderY + 18, strike);
-      hFx = shF - face * 16; hFy = shoulderY + 2;
-    } else if (airborne && (kind === "block" || f.holdHit)) {
-      hNx = shN + face * 2; hNy = headY - 30;
-      hFx = shF - face * 2; hFy = headY - 30;
-    } else if (airborne) {
-      hNx = shN + face * 6; hNy = headY - 20;
-      hFx = shF + face * 2; hFy = headY - 14;
-    } else if (acting && kind === "set") {
-      const s = swing;
-      hNx = shN + face * 2; hNy = headY - 12 - s * 5;
-      hFx = shF - face * 2; hFy = headY - 12 - s * 5;
-    } else if (acting && kind === "serve") {
-      const s = swing;
-      hNx = shN + face * (10 + s * 22); hNy = headY - 24 + s * 34;
-      hFx = shF - face * 6; hFy = shoulderY + 18;
-    } else if (acting) {
-      // bump / receive — arms joined into a platform, thrust on contact
-      const s = swing;
-      const px = face * (18 + s * 12);
-      const py = shoulderY + 34 - s * 8;
-      hNx = px; hNy = py;
-      hFx = px - face * 3; hFy = py + 2;
-    } else if (moving) {
-      const sw = Math.sin(f.legPhase);
-      hNx = shN + face * 8 + sw * 10; hNy = shoulderY + 26 - Math.abs(sw) * 2;
-      hFx = shF - face * 8 - sw * 10; hFy = shoulderY + 26 - Math.abs(sw) * 2;
-    } else if (ready) {
-      const b = breath * 1.5;
-      hNx = shN + face * 16; hNy = shoulderY + 26 + b;
-      hFx = shF + face * 10; hFy = shoulderY + 28 - b;
-    } else {
-      const b = breath * 2;
-      hNx = shN + face * 3; hNy = shoulderY + 34 + b;
-      hFx = shF - face * 3; hFy = shoulderY + 34 - b;
-    }
-
-    // ---- body lean (rotate upper body about the hip) ----
-    let lean = clamp(f.vz / MOVE_SPEED, -1, 1) * 0.14;
-    if (acting && (kind === "bump" || kind === "serve")) lean += face * 0.12;
-    else if (ready) lean += ballDirZ * 0.05;
-    if (airborne) lean *= 0.4;
-    if (f.stunned > 0) lean = Math.sin(this.t * 20) * 0.14 + face * 0.08;
-
+    // upper body (leans about the hip)
     ctx.save();
-    ctx.translate(0, hipY);
-    ctx.rotate(lean);
-    ctx.translate(0, -hipY);
+    ctx.translate(0, sHipY);
+    ctx.rotate(a.lean);
+    ctx.translate(0, -sHipY);
 
-    // far arm (behind torso)
-    this.drawArm(shF, shY, hFx, hFy, -face * 0.3, p.skinShade, p.skinShade, p.skinShade);
+    this.drawArm(shF, shY, a.hFx, a.hFy, -face * 0.3, p.skinShade, p.skinShade, p.skinShade);
 
-    // torso
-    const tg = ctx.createLinearGradient(0, shoulderY, 0, hipY + 6);
+    const tg = ctx.createLinearGradient(0, sShoulderY, 0, sHipY + 6);
     tg.addColorStop(0, p.jersey);
     tg.addColorStop(1, p.jerseyShade);
     ctx.fillStyle = tg;
-    this.roundRect(-18, shoulderY, 36, hipY - shoulderY + 12, 12);
+    this.roundRect(-18, sShoulderY, 36, sHipY - sShoulderY + 12, 12);
     ctx.fill();
     ctx.fillStyle = p.trim;
-    ctx.fillRect(-18, shoulderY + 12, 36, 4);
+    ctx.fillRect(-18, sShoulderY + 12, 36, 4);
     ctx.font = "13px Bungee, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(f.number), 0, shoulderY + 30);
+    ctx.fillText(String(f.number), 0, sShoulderY + 30);
 
-    // near arm (in front)
-    this.drawArm(shN, shY, hNx, hNy, face * 0.28, p.skin, p.skin, p.skin);
+    this.drawArm(shN, shY, a.hNx, a.hNy, face * 0.28, p.skin, p.skin, p.skin);
 
-    // head + neck
     ctx.fillStyle = p.skinShade;
-    ctx.fillRect(-5, shoulderY - 8, 10, 12);
-    const headTilt = clamp(lean * 0.4, -0.14, 0.14);
+    ctx.fillRect(-5, sShoulderY - 8, 10, 12);
+    const headTilt = clamp(a.lean * 0.4, -0.14, 0.14);
     const hx2 = face * 3 + headTilt * 30;
     ctx.fillStyle = p.skin;
     ctx.beginPath();
-    ctx.arc(hx2, headY, 15, 0, Math.PI * 2);
+    ctx.arc(hx2, sHeadY, 15, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = hexA(p.skinShade, 0.55);
     ctx.beginPath();
-    ctx.arc(hx2 - face * 8, headY + 3, 8, 0, Math.PI * 2);
+    ctx.arc(hx2 - face * 8, sHeadY + 3, 8, 0, Math.PI * 2);
     ctx.fill();
-    this.drawHair(p, hx2, headY, face);
-    this.drawFace(hx2, headY, face, f);
+    this.drawHair(p, hx2, sHeadY, face);
+    this.drawFace(hx2, sHeadY, face, f);
 
     ctx.restore();
     ctx.restore();

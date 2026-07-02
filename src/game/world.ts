@@ -4,20 +4,22 @@ import { aiIntent } from "./ai";
 import { Effects } from "./effects";
 import { Particles } from "../engine/particles";
 import { audio } from "../engine/audio";
+import { project } from "./camera";
 import {
-  FLOOR_Y,
-  NET_X,
-  NET_TOP,
-  CHAR_H,
-  REACH,
-  SPIKE_REACH,
+  COURT_W,
+  COURT_L,
+  NET_Z,
+  NET_H,
+  REACH_XZ,
+  REACH_Y,
+  SPIKE_REACH_Y,
   PERFECT_WINDOW,
-  JUMP_VELOCITY,
+  JUMP_V,
   CHAR_GRAVITY,
-  WALL_L,
-  WALL_R,
+  GRAVITY,
+  SPIKE_POWER,
   TEAM_SIZE,
-  homeX,
+  homePos,
   POINTS_TO_WIN_SET,
   SETS_TO_WIN_MATCH,
   WIN_BY_TWO,
@@ -30,16 +32,15 @@ import { clamp, randRange, sign } from "../engine/math";
 
 export type Phase = "ready" | "serve" | "rally" | "point" | "setover" | "matchover";
 
-const APEX_TIME = JUMP_VELOCITY / CHAR_GRAVITY;
-const IDLE: Intent = { moveX: 0, jump: false, hit: false, hitHeld: false };
+const APEX_TIME = JUMP_V / CHAR_GRAVITY;
+const IDLE: Intent = { moveX: 0, moveZ: 0, jump: false, hit: false, hitHeld: false };
 
-// Your two off-ball teammates are competent regardless of chosen difficulty.
 const TEAMMATE_DIFF: Difficulty = {
   key: "NORMAL",
   label: "",
-  reaction: 0.12,
+  reaction: 0.13,
   speedMul: 1.0,
-  errorPx: 34,
+  errorXZ: 18,
   jumpSkill: 0.72,
   aggression: 0.5,
 };
@@ -55,7 +56,7 @@ export class World {
   effects = new Effects();
   particles = new Particles();
 
-  points: [number, number] = [0, 0]; // [player, ai] in current set
+  points: [number, number] = [0, 0];
   sets: [number, number] = [0, 0];
   phase: Phase = "ready";
   private phaseTimer = 0;
@@ -66,7 +67,7 @@ export class World {
   longestRally = 0;
   banner = "";
 
-  private ballSideSign = -1;
+  private ballSideSign: Side = -1;
   private touchSide: Side | null = null;
   private touches = 0;
   private aiPalette: Palette;
@@ -77,8 +78,8 @@ export class World {
   ) {
     this.aiPalette = aiPalette;
     for (let i = 0; i < TEAM_SIZE; i++) {
-      this.playerTeam.push(new Fighter(-1, PLAYER_PALETTE, homeX(-1, i), i, PLAYER_NUMBERS[i]));
-      this.aiTeam.push(new Fighter(1, aiPalette, homeX(1, i), i, AI_NUMBERS[i]));
+      this.playerTeam.push(new Fighter(-1, PLAYER_PALETTE, i, PLAYER_NUMBERS[i]));
+      this.aiTeam.push(new Fighter(1, aiPalette, i, AI_NUMBERS[i]));
     }
   }
 
@@ -105,11 +106,7 @@ export class World {
     this.banner = immediate ? "" : "READY";
     this.touchSide = null;
     this.touches = 0;
-    for (let i = 0; i < TEAM_SIZE; i++) {
-      this.playerTeam[i].reset(homeX(-1, i));
-      this.aiTeam[i].reset(homeX(1, i));
-    }
-    // controller starts on the server (back player) or mid when receiving
+    for (const f of this.allFighters()) f.reset();
     this.controlledIndex = server === -1 ? 0 : 1;
     if (immediate) this.tossServe();
   }
@@ -117,17 +114,17 @@ export class World {
   private tossServe() {
     const team = this.server === -1 ? this.playerTeam : this.aiTeam;
     const srv = team[0];
-    this.ball.reset(srv.x, 210);
-    this.ball.setVelocity(0, 0);
+    // stand the server just inside the baseline
+    const h = homePos(this.server, 0);
+    srv.x = h.x;
+    srv.z = this.server === -1 ? 26 : COURT_L - 26;
+    this.ball.reset(srv.x, 130, srv.z);
     this.ballSideSign = this.server;
     audio.play("whistle");
   }
 
   private sideIndex(s: Side): 0 | 1 {
     return s === -1 ? 0 : 1;
-  }
-  private touchesForSide(s: Side): number {
-    return this.touchSide === s ? this.touches : 0;
   }
 
   // ---------------------------------------------------------------- update
@@ -173,11 +170,11 @@ export class World {
     }
   }
 
-  private nearestIndex(team: Fighter[]): number {
+  private nearestIndex(team: Fighter[], tx: number, tz: number): number {
     let idx = 0;
     let min = Infinity;
     for (let i = 0; i < team.length; i++) {
-      const d = Math.abs(this.ball.x - team[i].x);
+      const d = Math.hypot(tx - team[i].x, tz - team[i].z);
       if (d < min) {
         min = d;
         idx = i;
@@ -187,38 +184,38 @@ export class World {
   }
 
   private selectControlled() {
-    if (this.phase === "serve") {
-      if (this.server === -1) this.controlledIndex = 0;
+    if (this.phase === "serve" && this.server === -1) {
+      this.controlledIndex = 0;
       return;
     }
     const active = this.playerTeam[this.controlledIndex];
-    // lock switching mid-jump / mid-swing so a spike isn't hijacked
     if (!active.onGround || active.swing > 0.3) return;
 
-    const towardUs = this.ball.x < NET_X || this.ball.vx < -20;
-    const targetX = towardUs
-      ? clamp(this.ball.predictLandingX(FLOOR_Y - 40), WALL_L, NET_X)
-      : this.ball.x;
-
+    const towardUs = this.ball.z < NET_Z || this.ball.vz < -20;
+    let tx = this.ball.x;
+    let tz = this.ball.z;
+    if (towardUs) {
+      const l = this.ball.predictLanding();
+      tx = l.x;
+      tz = clamp(l.z, 8, NET_Z - 10);
+    }
     let minIdx = 0;
     let minD = Infinity;
     for (let i = 0; i < TEAM_SIZE; i++) {
-      const d = Math.abs(targetX - this.playerTeam[i].x);
+      const d = Math.hypot(tx - this.playerTeam[i].x, tz - this.playerTeam[i].z);
       if (d < minD) {
         minD = d;
         minIdx = i;
       }
     }
-    const curD = Math.abs(targetX - active.x);
-    if (minIdx !== this.controlledIndex && minD + 36 < curD) {
-      this.controlledIndex = minIdx;
-    }
+    const curD = Math.hypot(tx - active.x, tz - active.z);
+    if (minIdx !== this.controlledIndex && minD + 26 < curD) this.controlledIndex = minIdx;
   }
 
   private aiPrimaryIndex(serving: boolean, aNearest: number): number {
     if (serving && this.server === 1) return 0;
-    const onAiSide = this.ball.x > NET_X;
-    const heading = this.ball.vx > 20;
+    const onAiSide = this.ball.z > NET_Z;
+    const heading = this.ball.vz > 20;
     if (this.ball.active && (onAiSide || heading)) return aNearest;
     return -1;
   }
@@ -227,18 +224,16 @@ export class World {
     const serving = this.phase === "serve";
     this.selectControlled();
 
-    const pNearest = this.nearestIndex(this.playerTeam);
-    const aNearest = this.nearestIndex(this.aiTeam);
+    const pNearest = this.nearestIndex(this.playerTeam, this.ball.x, this.ball.z);
+    const aNearest = this.nearestIndex(this.aiTeam, this.ball.x, this.ball.z);
     const aiPrimary = this.aiPrimaryIndex(serving, aNearest);
-    const pTouches = this.touchesForSide(-1);
-    const aTouches = this.touchesForSide(1);
+    const pTouches = this.touchSide === -1 ? this.touches : 0;
+    const aTouches = this.touchSide === 1 ? this.touches : 0;
 
-    // player team
     for (let i = 0; i < TEAM_SIZE; i++) {
       const f = this.playerTeam[i];
-      if (i === this.controlledIndex) {
-        f.update(dt, playerIntent);
-      } else {
+      if (i === this.controlledIndex) f.update(dt, playerIntent);
+      else
         f.update(
           dt,
           aiIntent(dt, this.ball, f, {
@@ -249,9 +244,7 @@ export class World {
             touches: pTouches,
           }),
         );
-      }
     }
-    // ai team
     for (let i = 0; i < TEAM_SIZE; i++) {
       const f = this.aiTeam[i];
       f.update(
@@ -266,18 +259,15 @@ export class World {
       );
     }
 
-    // hit resolution
     for (const f of this.allFighters()) this.tryHit(f);
 
-    // ball step
     const events = this.ball.update(dt);
     for (const e of events) this.handleBallEvent(e);
 
-    // net crossing → new possession for the receiving side
     if (this.ball.live) {
-      const s = sign(this.ball.x - NET_X);
+      const s = sign(this.ball.z - NET_Z);
       if (s !== 0 && s !== this.ballSideSign) {
-        this.ballSideSign = s;
+        this.ballSideSign = s as Side;
         this.touchSide = null;
         this.touches = 0;
         this.rallyCrossings++;
@@ -285,44 +275,26 @@ export class World {
       }
     }
 
-    // serve safety: missed toss re-tosses (no penalty)
-    if (this.phase === "serve" && !this.ball.live && this.ball.y >= FLOOR_Y - 20) {
-      this.tossServe();
-    }
+    if (this.phase === "serve" && !this.ball.live && this.ball.y <= 0) this.tossServe();
   }
 
   private handleBallEvent(e: ReturnType<Ball["update"]>[number]) {
     switch (e.type) {
-      case "wall":
+      case "net": {
         audio.play("bounce");
-        this.particles.burst(this.ball.x, this.ball.y, 5, {
-          color: "#9fb4ff",
-          speed: [40, 120],
-          life: [0.2, 0.4],
-        });
-        break;
-      case "net":
-        audio.play("bounce");
-        this.particles.burst(NET_X, this.ball.y, 6, { color: "#ffffff", speed: [50, 140], life: [0.2, 0.45] });
+        const pr = project(this.ball.x, this.ball.y, NET_Z);
+        this.particles.burst(pr.sx, pr.sy, 6, { color: "#ffffff", speed: [50, 140], life: [0.2, 0.45] });
         this.effects.shake(4, 0.15);
         break;
+      }
       case "nettop":
         audio.play("bounce");
         break;
       case "floor":
         if (this.phase === "rally" && this.ball.live) {
-          this.scorePoint(e.side, e.x);
+          this.scorePoint(e.side, e.inBounds, e.x, e.z);
         } else {
           audio.play("bounce");
-          if (this.ball.speed() > 120) {
-            this.particles.burst(e.x, FLOOR_Y, 6, {
-              color: "#c9a27a",
-              speed: [60, 180],
-              angle: -Math.PI / 2,
-              spread: Math.PI * 0.7,
-              life: [0.2, 0.5],
-            });
-          }
         }
         break;
     }
@@ -330,90 +302,96 @@ export class World {
 
   // ---------------------------------------------------------------- hitting
   private canReach(f: Fighter): boolean {
-    const dxAbs = Math.abs(this.ball.x - f.x);
-    const reach = f.onGround ? REACH : SPIKE_REACH;
-    if (dxAbs > reach) return false;
-    const top = f.y - CHAR_H * (f.onGround ? 1.35 : 1.7);
-    const bottom = f.y + 10;
-    if (this.ball.y < top || this.ball.y > bottom) return false;
-    if (f.side === -1) return this.ball.x < NET_X + 30;
-    return this.ball.x > NET_X - 30;
+    const distXZ = Math.hypot(this.ball.x - f.x, this.ball.z - f.z);
+    if (distXZ > REACH_XZ) return false;
+    const reachY = f.onGround ? REACH_Y : SPIKE_REACH_Y;
+    if (this.ball.y < f.y - 6 || this.ball.y > f.y + reachY + 14) return false;
+    // stay on own side (small margin over the net for blocks)
+    if (f.side === -1) return this.ball.z < NET_Z + 24;
+    return this.ball.z > NET_Z - 24;
   }
 
   private tryHit(f: Fighter) {
-    if (!f.wantHit || !f.canHit()) return;
-    if (!this.ball.active) return;
+    if (!f.wantHit || !f.canHit() || !this.ball.active) return;
     if (!this.canReach(f)) return;
     this.resolveHit(f);
   }
 
+  private solveTo(tx: number, tz: number, T: number): { vx: number; vy: number; vz: number } {
+    const vx = (tx - this.ball.x) / T;
+    const vz = (tz - this.ball.z) / T;
+    const vy = (0.5 * GRAVITY * T * T - this.ball.y) / T; // land at y=0 after time T
+    return { vx, vy, vz };
+  }
+
   private resolveHit(f: Fighter) {
-    const opponentDir = (-f.side) as Side;
-    const nearNet = Math.abs(f.x - NET_X) < 190;
-    const ballHigh = this.ball.y < NET_TOP + 20;
+    const dirNet = (-f.side) as Side; // +z toward opponent
+    const nearNet = Math.abs(f.z - NET_Z) < 150;
+    const ballHigh = this.ball.y > NET_H - 12;
     const rallyBoost = 1 + Math.min(this.rallyCrossings * 0.02, 0.28);
-    const aimForward = clamp(f.aimX * opponentDir, -1, 1);
-    const aim = clamp(1 + 0.45 * aimForward, 0.55, 1.55);
+    const aimX = clamp(f.aimX, -1, 1);
 
     const sideTouches = this.touchSide === f.side ? this.touches : 0;
     const serveHit = !this.ball.live;
-    const mustGoOver = serveHit || sideTouches >= 2; // closing touch (or serve) crosses
+    const mustGoOver = serveHit || sideTouches >= 2;
 
-    const comingOver = sign(this.ball.vx) === f.side && Math.abs(this.ball.x - NET_X) < 60;
+    const comingOver = sign(this.ball.vz) === dirNet && Math.abs(this.ball.z - NET_Z) < 60;
     const isBlock = !f.onGround && nearNet && f.holdHit && comingOver;
     const isSpike = !f.onGround && nearNet && ballHigh;
 
     let kind: Fighter["lastHitKind"] = "bump";
     let vx = 0;
     let vy = 0;
+    let vz = 0;
     let perfect = false;
 
+    const farCourtZ = () => NET_Z + dirNet * randRange(120, 260); // deep in opponent court
+
     if (serveHit) {
-      // Dedicated serve: a strong high arc that clears the net from the back
-      // court and lands in the opponent's half (volleyball serve rules).
       kind = "serve";
-      vx = opponentDir * randRange(430, 500);
-      vy = -randRange(820, 890);
+      const tx = clamp(f.x + aimX * 90, 40, COURT_W - 40);
+      const tz = NET_Z + dirNet * randRange(150, 240);
+      ({ vx, vy, vz } = this.solveTo(tx, tz, 1.3));
     } else if (isBlock) {
       kind = "block";
-      vx = opponentDir * randRange(480, 660) * rallyBoost;
-      vy = randRange(360, 520);
+      vz = dirNet * randRange(280, 420) * rallyBoost;
+      vy = -randRange(150, 240);
+      vx = aimX * 120;
     } else if (isSpike) {
       kind = "spike";
       perfect = Math.abs(f.jumpTime - APEX_TIME) < PERFECT_WINDOW || f.airborneApex;
-      const power = (perfect ? 1.18 : 0.95) * rallyBoost;
-      vx = opponentDir * randRange(840, 1000) * power;
-      vy = randRange(330, 460) * (perfect ? 1.05 : 1);
+      const power = (perfect ? 1.2 : 0.95) * rallyBoost;
+      vz = dirNet * SPIKE_POWER * power;
+      vy = -randRange(90, 200) * (perfect ? 1.1 : 1);
+      vx = aimX * 160;
     } else if (mustGoOver) {
       kind = "attack";
-      vx = opponentDir * randRange(430, 560) * aim * rallyBoost;
-      vy = -randRange(250, 350);
+      const tx = clamp(f.x + aimX * 110, 40, COURT_W - 40);
+      ({ vx, vy, vz } = this.solveTo(tx, farCourtZ(), 1.0));
+      vx *= rallyBoost;
+      vz *= rallyBoost;
     } else {
-      // receive / set — pop up on OWN side toward the net so a teammate can attack
+      // receive / set — pop up on OWN side toward the net for a teammate
       kind = sideTouches >= 1 ? "set" : "bump";
-      const setX = f.side === -1 ? NET_X - 120 : NET_X + 120;
-      const dir = sign(setX - this.ball.x) || opponentDir;
-      const nearOwnNet = f.side === -1 ? this.ball.x > NET_X - 150 : this.ball.x < NET_X + 150;
-      const drift = nearOwnNet ? randRange(40, 120) : randRange(140, 240);
-      vx = dir * drift * aim;
-      vy = -randRange(720, 840);
+      const tx = clamp(f.x + aimX * 70, 40, COURT_W - 40);
+      const tz = NET_Z - dirNet * randRange(50, 100); // just in front of the net, our side
+      ({ vx, vy, vz } = this.solveTo(tx, tz, 0.82));
     }
 
-    // nudge out of the body so it doesn't immediately re-collide
-    this.ball.x += sign(vx) * 6;
-    this.ball.y -= 2;
-    this.ball.setVelocity(vx, vy);
+    // nudge out of the body a touch
+    this.ball.z += dirNet * 4;
+    this.ball.y += 3;
+    this.ball.setVelocity(vx, vy, vz);
     this.ball.lastHitBy = f.side;
     f.lastHitKind = serveHit ? "serve" : kind;
-    f.triggerSwing(opponentDir);
+    f.triggerSwing(dirNet);
 
-    // possession / touch tracking
     if (!this.ball.live) {
       this.ball.live = true;
       this.phase = "rally";
       this.touchSide = f.side;
       this.touches = 1;
-      this.ballSideSign = sign(this.ball.x - NET_X) || f.side;
+      this.ballSideSign = (sign(this.ball.z - NET_Z) || f.side) as Side;
     } else {
       if (this.touchSide === f.side) this.touches++;
       else {
@@ -421,18 +399,20 @@ export class World {
         this.touches = 1;
       }
       if (this.touches > 3) {
-        this.effects.popup("OVER 3!", f.x, FLOOR_Y - 200, "#ff6b6b");
-        this.scorePoint(f.side, f.x, true);
+        const pr = project(f.x, f.y + 70, f.z);
+        this.effects.popup("OVER 3!", pr.sx, pr.sy, "#ff6b6b");
+        this.scorePoint(f.side, true, f.x, f.z);
         return;
       }
     }
 
-    this.spawnHitFx(f.lastHitKind, perfect);
+    this.spawnHitFx(f, f.lastHitKind, perfect);
   }
 
-  private spawnHitFx(kind: Fighter["lastHitKind"], perfect: boolean) {
-    const hx = this.ball.x;
-    const hy = this.ball.y;
+  private spawnHitFx(f: Fighter, kind: Fighter["lastHitKind"], perfect: boolean) {
+    const pr = project(this.ball.x, this.ball.y, this.ball.z);
+    const hx = pr.sx;
+    const hy = pr.sy;
     switch (kind) {
       case "spike": {
         this.ball.hot = perfect ? 1.2 : 0.9;
@@ -446,9 +426,9 @@ export class World {
         if (perfect) {
           this.effects.slow(0.16, 0.32);
           audio.play("perfect");
-          this.effects.popup("PERFECT!", hx, hy - 60, "#ffe14d", true);
+          this.effects.popup("PERFECT!", hx, hy - 40, "#ffe14d", true);
         } else {
-          this.effects.popup("SPIKE!", hx, hy - 50, "#ff5252");
+          this.effects.popup("SPIKE!", hx, hy - 30, "#ff5252");
         }
         this.particles.burst(hx, hy, perfect ? 26 : 16, {
           color: perfect ? ["#ffe14d", "#fff", "#ff8a4d"] : ["#ffd24d", "#fff"],
@@ -458,7 +438,6 @@ export class World {
           shape: "spark",
           gravity: 200,
         });
-        this.particles.burst(hx, hy, 1, { color: "#fff", shape: "ring", size: [8, 8], life: [0.4, 0.4] });
         break;
       }
       case "block":
@@ -467,8 +446,7 @@ export class World {
         this.effects.freeze(0.06);
         this.effects.flash("#bfefff", 0.22);
         this.effects.shockwave(hx, hy, "#6fd3ff", 140, 7);
-        this.effects.punch(1.05, hx, hy);
-        this.effects.popup("BLOCK!", hx, hy - 50, "#6fd3ff");
+        this.effects.popup("BLOCK!", hx, hy - 30, "#6fd3ff");
         this.particles.burst(hx, hy, 16, { color: ["#6fd3ff", "#fff"], speed: [150, 380], shape: "spark", life: [0.2, 0.5] });
         break;
       case "set":
@@ -487,12 +465,16 @@ export class World {
         audio.play("bump");
         this.particles.burst(hx, hy, 7, { color: "#eaf1ff", speed: [70, 190], life: [0.2, 0.4] });
     }
+    void f;
   }
 
   // ---------------------------------------------------------------- scoring
-  private scorePoint(floorSide: Side, x: number, _fault = false) {
+  private scorePoint(floorSide: Side, inBounds: boolean, x: number, z: number) {
     if (this.phase !== "rally") return;
-    const winner = (-floorSide) as Side;
+    let winner: Side;
+    if (inBounds) winner = (-floorSide) as Side;
+    else winner = (this.ball.lastHitBy ? -this.ball.lastHitBy : -floorSide) as Side;
+
     this.lastScorer = winner;
     this.points[this.sideIndex(winner)]++;
 
@@ -501,9 +483,10 @@ export class World {
     this.effects.shake(8, 0.3);
     this.ball.live = false;
 
-    this.particles.burst(x, FLOOR_Y, 16, {
-      color: "#d8b487",
-      speed: [80, 260],
+    const pr = project(x, 0, z);
+    this.particles.burst(pr.sx, pr.sy, 16, {
+      color: inBounds ? "#d8b487" : "#ff6b6b",
+      speed: [80, 240],
       angle: -Math.PI / 2,
       spread: Math.PI * 0.9,
       life: [0.3, 0.7],
@@ -515,15 +498,14 @@ export class World {
     for (const f of wteam) f.celebrate = 1.4;
     for (const f of lteam) f.stunned = 0.5;
 
-    const px = winner === -1 ? WALL_L + 180 : WALL_R - 180;
-    this.effects.popup(winner === -1 ? "POINT!" : "LOST!", px, 220, winner === -1 ? "#7dffa8" : "#ff8a8a", true);
+    this.effects.popup(winner === -1 ? "POINT!" : "LOST!", 480, 210, winner === -1 ? "#7dffa8" : "#ff8a8a", true);
+    if (!inBounds) this.effects.popup("OUT!", pr.sx, pr.sy - 20, "#ff6b6b");
     if (winner === -1) audio.play("cheer");
 
     const pp = this.points[0];
     const ap = this.points[1];
     const setWon =
       (pp >= POINTS_TO_WIN_SET || ap >= POINTS_TO_WIN_SET) && (!WIN_BY_TWO || Math.abs(pp - ap) >= 2);
-
     if (setWon) {
       const setWinner: Side = pp > ap ? -1 : 1;
       this.sets[this.sideIndex(setWinner)]++;
@@ -550,14 +532,11 @@ export class World {
   setDifficulty(d: Difficulty) {
     this.difficulty = d;
   }
-
-  /** Perfect-spike timing hint for the HUD ring (0..1 how close to apex). */
   spikeTiming(): number | null {
     const f = this.activeFighter;
     if (f.onGround) return null;
     return 1 - clamp(Math.abs(f.jumpTime - APEX_TIME) / 0.25, 0, 1);
   }
-
   get difficultyRef() {
     return this.difficulty;
   }

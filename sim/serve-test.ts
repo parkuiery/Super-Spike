@@ -1,58 +1,54 @@
 /**
- * Verifies the serve trajectory clears the net and lands in the opponent's
- * half from realistic serve positions, using the real Ball physics (net +
- * floor collisions). Run via esbuild.
+ * Verifies serves clear the net and land in the opponent's court (3D). Uses the
+ * real Ball physics and replicates the World serve solve (target + flight time).
  */
 // @ts-nocheck
 import { Ball } from "../src/game/ball";
-import { NET_X, WALL_L, WALL_R, FLOOR_Y } from "../src/game/config";
+import { COURT_W, COURT_L, NET_Z, GRAVITY } from "../src/game/config";
+
+function solveTo(b: Ball, tx: number, tz: number, T: number) {
+  return {
+    vx: (tx - b.x) / T,
+    vy: (0.5 * GRAVITY * T * T - b.y) / T,
+    vz: (tz - b.z) / T,
+  };
+}
 
 function trySer(x: number, contactY: number, side: -1 | 1) {
-  const opponentDir = -side;
+  const dirNet = -side;
   const b = new Ball();
-  b.reset(x, contactY);
+  b.reset(x, contactY, side === -1 ? 26 : COURT_L - 26);
   b.live = true;
-  // mid of the tuned serve range
-  b.setVelocity(opponentDir * 465, -855);
+  const tx = Math.max(40, Math.min(COURT_W - 40, x));
+  const tz = NET_Z + dirNet * 195;
+  const v = solveTo(b, tx, tz, 1.3);
+  b.setVelocity(v.vx, v.vy, v.vz);
   let hardNet = false;
-  for (let i = 0; i < 1200; i++) {
-    const events = b.update(1 / 120);
-    for (const e of events) {
+  for (let i = 0; i < 1400; i++) {
+    for (const e of b.update(1 / 120)) {
       if (e.type === "net") hardNet = true;
       if (e.type === "floor") {
-        const landSide = e.x < NET_X ? -1 : 1;
-        return { landSide, landX: Math.round(e.x), hardNet, crossedToOpp: landSide === opponentDir };
+        const landSide = e.z < NET_Z ? -1 : 1;
+        return { landZ: Math.round(e.z), landSide, inBounds: e.inBounds, hardNet, ok: landSide === dirNet && e.inBounds && !hardNet };
       }
     }
   }
-  return { landSide: 0, landX: -1, hardNet, crossedToOpp: false };
+  return { landZ: -1, landSide: 0, inBounds: false, hardNet, ok: false };
 }
 
 let pass = 0;
 let fail = 0;
 const rows: string[] = [];
-const leftPositions = [WALL_L + 70, WALL_L + 140, 300, NET_X - 130];
-for (const x of leftPositions) {
-  for (const cy of [385, 410, 440]) {
-    const r = trySer(x, cy, -1);
-    const ok = r.crossedToOpp && !r.hardNet;
-    if (ok) pass++;
-    else fail++;
-    rows.push(
-      `L x=${x} cy=${cy} -> land x=${r.landX} side=${r.landSide} hardNet=${r.hardNet} ${ok ? "OK" : "FAIL"}`,
-    );
+for (const side of [-1, 1] as const) {
+  for (const x of [60, COURT_W / 2, COURT_W - 60]) {
+    for (const cy of [40, 60, 90]) {
+      const r = trySer(x, cy, side);
+      r.ok ? pass++ : fail++;
+      rows.push(`side=${side} x=${x} cy=${cy} -> landZ=${r.landZ} side=${r.landSide} in=${r.inBounds} net=${r.hardNet} ${r.ok ? "OK" : "FAIL"}`);
+    }
   }
 }
-// mirror check on the right (AI serves)
-for (const x of [WALL_R - 70, WALL_R - 140, 660]) {
-  const r = trySer(x, 410, 1);
-  const ok = r.crossedToOpp && !r.hardNet;
-  if (ok) pass++;
-  else fail++;
-  rows.push(`R x=${x} cy=410 -> land x=${r.landX} side=${r.landSide} hardNet=${r.hardNet} ${ok ? "OK" : "FAIL"}`);
-}
-
-console.log("--- SERVE TRAJECTORY TEST ---");
+console.log("--- SERVE TRAJECTORY TEST (3D) ---");
 for (const r of rows) console.log(r);
 console.log(`pass=${pass} fail=${fail}`);
 console.log(fail === 0 ? "RESULT: PASS ✅" : "RESULT: FAIL ❌");

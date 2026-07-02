@@ -91,7 +91,7 @@ export function drawTitle(ctx: Ctx, t: number, ballY: number) {
 
   ctx.fillStyle = "rgba(234,241,255,0.4)";
   ctx.font = "14px Rajdhani, sans-serif";
-  ctx.fillText("이동 A/D · 점프 SPACE · 스파이크 J", VIEW_W / 2, 520);
+  ctx.fillText("코트 이동 WASD · 점프 SPACE · 스파이크 J", VIEW_W / 2, 520);
 }
 
 export function drawSelect(ctx: Ctx, t: number, diffIndex: number, oppIndex: number) {
@@ -183,7 +183,7 @@ export function drawControls(ctx: Ctx) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(
-    "A/D 이동 · SPACE 점프 · J 리시브/토스/스파이크 · 공 근처 아군 자동 조종(🟢화살표) · 네트에서 J유지=블록",
+    "WASD 코트 이동(W=전진) · SPACE 점프 · J 리시브/토스/스파이크 · 공 근처 아군 자동 조종(🟢) · 네트에서 J유지=블록",
     VIEW_W / 2,
     VIEW_H - 46,
   );

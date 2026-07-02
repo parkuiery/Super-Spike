@@ -2,58 +2,61 @@
 export const VIEW_W = 960;
 export const VIEW_H = 600;
 
-/** Court geometry (in logical pixels). */
-export const FLOOR_Y = 512; // top of the ground
-export const CEIL_Y = 40; // ball can't go above this
-export const WALL_L = 40; // left playable wall
-export const WALL_R = VIEW_W - 40; // right playable wall
-export const COURT_W = WALL_R - WALL_L;
+/**
+ * The game is played on a 3D court seen from a 3/4 top-down perspective.
+ * World axes:
+ *   x  — across the court (0 .. COURT_W), left to right
+ *   z  — depth along the court (0 .. COURT_L); 0 = near baseline, COURT_L = far
+ *   y  — height above the floor (0 = ground, up is positive)
+ * The near team (player) defends the small-z half; the far team (AI) the large-z half.
+ */
+export const COURT_W = 360;
+export const COURT_L = 760;
+export const NET_Z = COURT_L / 2;
+export const NET_H = 66; // net height in world units
+export const NET_BAND = 12; // net thickness in z for ball collision
 
-export const NET_X = VIEW_W / 2;
-export const NET_TOP = 300; // top of the net
-export const NET_W = 8;
-
-/** Physics (units: px, seconds). */
-export const GRAVITY = 1500;
-export const BALL_R = 15;
-export const BALL_RESTITUTION = 0.62; // floor bounce energy retained
-export const BALL_MAX_SPEED = 1300;
+/** Physics (world units, seconds). */
+export const GRAVITY = 430; // ball gravity
+export const BALL_R = 11;
+export const BALL_RESTITUTION = 0.5;
+export const BALL_MAX_SPEED = 1000;
 export const AIR_DRAG = 0.999;
 
-/** Character. */
-export const CHAR_W = 54;
-export const CHAR_H = 92;
-export const MOVE_SPEED = 340;
-export const MOVE_ACCEL = 2600;
-export const AIR_CONTROL = 0.55;
-export const JUMP_VELOCITY = 720;
-export const CHAR_GRAVITY = 2100;
-export const REACH = 74; // hit reach radius from body center
-export const SPIKE_REACH = 92; // reach while airborne near apex
+/** Characters (world units). */
+export const MOVE_SPEED = 205;
+export const MOVE_ACCEL = 1500;
+export const AIR_CONTROL = 0.5;
+export const JUMP_V = 250; // initial jump speed (y)
+export const CHAR_GRAVITY = 640;
+export const REACH_XZ = 44; // horizontal reach radius on the court plane
+export const REACH_Y = 78; // how high the arms reach while grounded
+export const SPIKE_REACH_Y = 118; // reach while airborne
+export const CHAR_HEIGHT = 74; // world height of a standing player (for the head)
 
-/** Hit tuning. */
+/** Hit tuning (world-unit velocities). */
 export const HIT_COOLDOWN = 0.12;
-export const PERFECT_WINDOW = 0.11; // seconds around apex/timing for perfect spike
-export const SPIKE_POWER = 1180;
-export const BUMP_POWER = 620;
-export const SET_POWER = 540;
-export const BLOCK_POWER = 900;
-
-/** Team formation. */
-export const TEAM_SIZE = 3;
-/** Home x for a fighter by side and role index (0 = back, 1 = mid, 2 = front/net). */
-export function homeX(side: Side, role: number): number {
-  const left = [WALL_L + 70, WALL_L + 215, NET_X - 95];
-  const right = [WALL_R - 70, WALL_R - 215, NET_X + 95];
-  return (side === -1 ? left : right)[role];
-}
+export const PERFECT_WINDOW = 0.11;
+export const SPIKE_POWER = 620;
+export const BUMP_UP = 300;
 
 /** Match rules. */
 export const POINTS_TO_WIN_SET = 7;
 export const SETS_TO_WIN_MATCH = 2; // best of 3
 export const WIN_BY_TWO = true;
 
-export type Side = -1 | 1; // -1 = left (player), 1 = right (AI)
+export const TEAM_SIZE = 3;
+
+export type Side = -1 | 1; // -1 = near (player), 1 = far (AI)
+
+/** Home position for a fighter by side and role index (0 back-left, 1 back-right, 2 front/net). */
+export function homePos(side: Side, role: number): { x: number; z: number } {
+  const xs = [COURT_W * 0.27, COURT_W * 0.73, COURT_W * 0.5];
+  const nearZ = [NET_Z * 0.34, NET_Z * 0.34, NET_Z * 0.8];
+  const x = xs[role];
+  const z = side === -1 ? nearZ[role] : COURT_L - nearZ[role];
+  return { x, z };
+}
 
 export type HairStyle = "spiky" | "ponytail" | "swept" | "mohawk";
 
@@ -62,13 +65,13 @@ export interface Palette {
   skinShade: string;
   hair: string;
   hairShade: string;
-  hairLight: string; // hair highlight
+  hairLight: string;
   jersey: string;
   jerseyShade: string;
   trim: string;
   shorts: string;
   shoe: string;
-  accent: string; // aura / signature color for effects
+  accent: string;
   style: HairStyle;
   name: string;
 }
@@ -140,15 +143,15 @@ export const AI_PALETTES: Palette[] = [
 export interface Difficulty {
   key: "EASY" | "NORMAL" | "HARD";
   label: string;
-  reaction: number; // seconds of delay before AI commits
+  reaction: number;
   speedMul: number;
-  errorPx: number; // aiming error in px
-  jumpSkill: number; // 0..1 probability it times spikes/blocks well
-  aggression: number; // 0..1 tendency to go for spikes
+  errorXZ: number; // aiming error in world units
+  jumpSkill: number;
+  aggression: number;
 }
 
 export const DIFFICULTIES: Difficulty[] = [
-  { key: "EASY", label: "EASY", reaction: 0.26, speedMul: 0.82, errorPx: 90, jumpSkill: 0.35, aggression: 0.4 },
-  { key: "NORMAL", label: "NORMAL", reaction: 0.16, speedMul: 0.95, errorPx: 48, jumpSkill: 0.6, aggression: 0.62 },
-  { key: "HARD", label: "HARD", reaction: 0.08, speedMul: 1.08, errorPx: 20, jumpSkill: 0.85, aggression: 0.82 },
+  { key: "EASY", label: "EASY", reaction: 0.28, speedMul: 0.82, errorXZ: 46, jumpSkill: 0.35, aggression: 0.4 },
+  { key: "NORMAL", label: "NORMAL", reaction: 0.17, speedMul: 0.96, errorXZ: 26, jumpSkill: 0.6, aggression: 0.62 },
+  { key: "HARD", label: "HARD", reaction: 0.09, speedMul: 1.08, errorXZ: 12, jumpSkill: 0.85, aggression: 0.82 },
 ];

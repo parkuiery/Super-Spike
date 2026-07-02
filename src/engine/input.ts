@@ -78,17 +78,24 @@ export class Input {
     if (this.down("ArrowRight", "KeyD")) x += 1;
     return x;
   }
+  /** +1 = toward the net / far side (up the screen), -1 = toward own baseline. */
+  get moveZ(): number {
+    let z = 0;
+    if (this.down("ArrowUp", "KeyW")) z += 1;
+    if (this.down("ArrowDown", "KeyS")) z -= 1;
+    return z;
+  }
   jumpHeld(): boolean {
-    return this.down("Space", "ArrowUp", "KeyW");
+    return this.down("Space");
   }
   jumpPressed(): boolean {
-    return this.pressed("Space", "ArrowUp", "KeyW");
+    return this.pressed("Space");
   }
   hitHeld(): boolean {
-    return this.down("KeyJ", "KeyK", "ShiftLeft") || this.pointerDown;
+    return this.down("KeyJ", "KeyK") || this.pointerDown;
   }
   hitPressed(): boolean {
-    return this.pressed("KeyJ", "KeyK", "ShiftLeft") || this.pointerPressed;
+    return this.pressed("KeyJ", "KeyK") || this.pointerPressed;
   }
   confirmPressed(): boolean {
     return this.pressed("Enter", "Space", "KeyJ") || this.pointerPressed;

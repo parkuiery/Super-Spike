@@ -157,6 +157,7 @@ class Game {
 
     const intent = {
       moveX: this.input.moveX,
+      moveZ: this.input.moveZ,
       jump: this.input.jumpPressed(),
       hit: this.input.hitPressed(),
       hitHeld: this.input.hitHeld(),

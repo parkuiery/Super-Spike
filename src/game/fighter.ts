@@ -1,97 +1,90 @@
 import {
-  CHAR_W,
-  CHAR_H,
   MOVE_SPEED,
   MOVE_ACCEL,
   AIR_CONTROL,
-  JUMP_VELOCITY,
+  JUMP_V,
   CHAR_GRAVITY,
-  FLOOR_Y,
-  WALL_L,
-  WALL_R,
-  NET_X,
-  NET_W,
+  COURT_W,
+  NET_Z,
+  COURT_L,
   HIT_COOLDOWN,
+  homePos,
   type Side,
   type Palette,
 } from "./config";
 import { approach, clamp } from "../engine/math";
 
 export interface Intent {
-  moveX: number; // -1..1
-  jump: boolean; // edge: pressed this frame
-  hit: boolean; // edge: pressed this frame
+  moveX: number; // -1..1 (left/right across court)
+  moveZ: number; // -1..1 (toward/away from net; + = toward far)
+  jump: boolean;
+  hit: boolean;
   hitHeld: boolean;
 }
 
 export class Fighter {
   x: number;
-  y = FLOOR_Y; // feet
+  z: number;
+  y = 0; // height
   vx = 0;
+  vz = 0;
   vy = 0;
   onGround = true;
-  facing: Side;
+  facing = 1; // sprite facing (-1 left, 1 right)
 
   hitCooldown = 0;
-  swing = 0; // 0..1 animation of an arm swing (decays)
-  swingDir = 0; // -1..1 horizontal aim of the current swing
-  aimX = 0; // latest horizontal intent (used to aim hits)
-  holdHit = false; // whether the hit key is held (for blocks)
+  swing = 0;
+  swingDir = 0;
+  aimX = 0;
+  aimZ = 0;
+  holdHit = false;
   lastHitKind: "bump" | "set" | "spike" | "attack" | "block" | "serve" | "" = "";
-  jumpTime = 0; // time since leaving ground (for spike-timing window)
+  jumpTime = 0;
   airborneApex = false;
-  wantHit = false; // buffered hit request while airborne
+  wantHit = false;
   wantHitTimer = 0;
 
-  // visual anim state
-  bob = 0;
-  squash = 1; // <1 = squashed (landing), >1 = stretched (jump)
+  squash = 1;
   legPhase = 0;
-  blink = 0;
-  celebrate = 0; // >0 during point celebration
+  celebrate = 0;
   stunned = 0;
 
-  // AI state (used only when this fighter is AI-driven)
+  // AI state
   aiReact = 0;
   aiTargetX = 0;
+  aiTargetZ = 0;
   aiWantJump = false;
 
   constructor(
     public side: Side,
     public palette: Palette,
-    startX: number,
-    public role: number, // 0 back, 1 mid, 2 front(net)
-    public number: number, // jersey number
+    public role: number,
+    public number: number,
   ) {
-    this.x = startX;
-    this.aiTargetX = startX;
-    this.facing = side === -1 ? 1 : -1; // face the net
+    const h = homePos(side, role);
+    this.x = h.x;
+    this.z = h.z;
+    this.aiTargetX = h.x;
+    this.aiTargetZ = h.z;
   }
 
-  get halfW() {
-    return CHAR_W / 2;
-  }
-  get bodyCenterY() {
-    return this.y - CHAR_H * 0.55;
+  get bodyTopY() {
+    return this.y + 74; // approx head height in world units
   }
   get handY() {
-    // where the hitting hand reaches (higher while airborne / swinging)
-    const reachUp = this.onGround ? CHAR_H * 0.95 : CHAR_H * 1.25;
-    return this.y - reachUp;
+    return this.y + (this.onGround ? 78 : 118);
   }
 
-  private xMin(): number {
-    return this.side === -1 ? WALL_L + this.halfW : NET_X + NET_W / 2 + this.halfW;
-  }
-  private xMax(): number {
-    return this.side === -1 ? NET_X - NET_W / 2 - this.halfW : WALL_R - this.halfW;
+  private zBounds(): [number, number] {
+    return this.side === -1 ? [12, NET_Z - 16] : [NET_Z + 16, COURT_L - 12];
   }
 
-  reset(startX: number) {
-    this.x = startX;
-    this.y = FLOOR_Y;
-    this.vx = 0;
-    this.vy = 0;
+  reset() {
+    const h = homePos(this.side, this.role);
+    this.x = h.x;
+    this.z = h.z;
+    this.y = 0;
+    this.vx = this.vz = this.vy = 0;
     this.onGround = true;
     this.hitCooldown = 0;
     this.swing = 0;
@@ -101,7 +94,8 @@ export class Fighter {
     this.stunned = 0;
     this.squash = 1;
     this.aiReact = 0;
-    this.aiTargetX = startX;
+    this.aiTargetX = h.x;
+    this.aiTargetZ = h.z;
     this.aiWantJump = false;
   }
 
@@ -116,71 +110,62 @@ export class Fighter {
 
     const frozen = this.stunned > 0 || this.celebrate > 0;
     const mx = frozen ? 0 : intent.moveX;
+    const mz = frozen ? 0 : intent.moveZ;
     this.aimX = intent.moveX;
+    this.aimZ = intent.moveZ;
     this.holdHit = intent.hitHeld;
 
-    // horizontal movement
-    const target = mx * MOVE_SPEED;
     const accel = MOVE_ACCEL * (this.onGround ? 1 : AIR_CONTROL);
-    this.vx = approach(this.vx, target, accel * dt);
+    this.vx = approach(this.vx, mx * MOVE_SPEED, accel * dt);
+    this.vz = approach(this.vz, mz * MOVE_SPEED, accel * dt);
     if (Math.abs(mx) > 0.1) this.facing = mx < 0 ? -1 : 1;
 
-    // jump
     if (intent.jump && this.onGround && !frozen) {
-      this.vy = -JUMP_VELOCITY;
+      this.vy = JUMP_V;
       this.onGround = false;
       this.jumpTime = 0;
       this.squash = 1.25;
     }
-
-    // buffer a hit press so airborne timing feels responsive
     if (intent.hit && !frozen) {
       this.wantHit = true;
       this.wantHitTimer = 0.16;
     }
 
-    // gravity
     if (!this.onGround) {
-      this.vy += CHAR_GRAVITY * dt;
+      this.vy -= CHAR_GRAVITY * dt;
       this.jumpTime += dt;
-      this.airborneApex = Math.abs(this.vy) < 90;
+      this.airborneApex = Math.abs(this.vy) < 40;
     }
 
     this.x += this.vx * dt;
+    this.z += this.vz * dt;
     this.y += this.vy * dt;
 
-    // clamp to own half
-    const lo = this.xMin();
-    const hi = this.xMax();
-    if (this.x < lo) {
-      this.x = lo;
-      if (this.vx < 0) this.vx = 0;
-    } else if (this.x > hi) {
-      this.x = hi;
-      if (this.vx > 0) this.vx = 0;
+    // clamp to court / own half
+    this.x = clamp(this.x, 12, COURT_W - 12);
+    const [zlo, zhi] = this.zBounds();
+    if (this.z < zlo) {
+      this.z = zlo;
+      if (this.vz < 0) this.vz = 0;
+    } else if (this.z > zhi) {
+      this.z = zhi;
+      if (this.vz > 0) this.vz = 0;
     }
 
-    // ground
-    if (this.y >= FLOOR_Y) {
-      if (!this.onGround && this.vy > 400) this.squash = 0.7; // landing squash
-      this.y = FLOOR_Y;
+    if (this.y <= 0) {
+      if (!this.onGround && this.vy < -140) this.squash = 0.72;
+      this.y = 0;
       this.vy = 0;
       this.onGround = true;
     }
 
-    // animation state
     this.squash = approach(this.squash, 1, dt * 4);
     this.swing = Math.max(0, this.swing - dt * 6);
-    if (this.onGround && Math.abs(this.vx) > 30) {
-      this.legPhase += dt * Math.abs(this.vx) * 0.05;
-    } else {
-      this.legPhase = approach(this.legPhase, 0, dt * 8);
-    }
-    this.bob = Math.sin(performanceBob(this.legPhase)) * 2;
-    this.blink = Math.max(0, this.blink - dt);
+    const planar = Math.hypot(this.vx, this.vz);
+    if (this.onGround && planar > 24) this.legPhase += dt * planar * 0.06;
+    else this.legPhase = approach(this.legPhase, 0, dt * 8);
   }
 
-  /** Called by the match when a swing actually connects with the ball. */
   triggerSwing(dir: number) {
     this.swing = 1;
     this.swingDir = clamp(dir, -1, 1);
@@ -192,9 +177,4 @@ export class Fighter {
   canHit(): boolean {
     return this.hitCooldown <= 0 && this.stunned <= 0 && this.celebrate <= 0;
   }
-}
-
-// tiny helper to keep bob deterministic without Date.now
-function performanceBob(phase: number): number {
-  return phase;
 }

@@ -1,0 +1,58 @@
+:root {
+  --bg: #0b1020;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: "Rajdhani", system-ui, sans-serif;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 30%, #1a2140 0%, #070a16 70%);
+}
+
+#game {
+  display: block;
+  image-rendering: auto;
+  background: #0a0e1c;
+  box-shadow:
+    0 0 0 2px rgba(120, 160, 255, 0.15),
+    0 30px 90px rgba(0, 0, 0, 0.6);
+  border-radius: 10px;
+  cursor: crosshair;
+}
+
+#loading {
+  position: absolute;
+  font-family: "Bungee", sans-serif;
+  letter-spacing: 4px;
+  color: #6f86ff;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}

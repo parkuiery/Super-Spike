@@ -9,11 +9,11 @@ import { VIEW_W, COURT_W, COURT_L } from "./config";
  *   world (x, y, z) — x = depth (near..far sideline), z = horizontal, y = height
  */
 const CX = VIEW_W / 2;
-const FOCAL = 900;
-const D = 900; // camera distance beyond the near sideline (x = 0)
-const HORIZON = -649;
-const GROUND_K = 1189;
-const HEIGHT_K = 1.1;
+const FOCAL = 600;
+const D = 600; // camera distance beyond the near sideline (x = 0); smaller = lower, more grazing angle
+const HORIZON = -60;
+const GROUND_K = 560; // smaller = flatter/more side-on court (less top-down)
+const HEIGHT_K = 1.3; // larger = taller players/net (more side-on feel)
 
 export interface Projected {
   sx: number;

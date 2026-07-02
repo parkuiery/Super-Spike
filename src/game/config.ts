@@ -49,10 +49,17 @@ export const TEAM_SIZE = 3;
 
 export type Side = -1 | 1; // -1 = near (player), 1 = far (AI)
 
-/** Home position for a fighter by side and role index (0 back-left, 1 back-right, 2 front/net). */
+/**
+ * Home position by side and role: 0 = receiver (back), 1 = setter (front-centre),
+ * 2 = spiker (front-wing). This supports the volleyball combo receive → set →
+ * spike with three different players.
+ */
+export const ROLE_RECEIVER = 0;
+export const ROLE_SETTER = 1;
+export const ROLE_SPIKER = 2;
 export function homePos(side: Side, role: number): { x: number; z: number } {
-  const xs = [COURT_W * 0.27, COURT_W * 0.73, COURT_W * 0.5];
-  const nearZ = [NET_Z * 0.34, NET_Z * 0.34, NET_Z * 0.8];
+  const xs = [COURT_W * 0.32, COURT_W * 0.52, COURT_W * 0.76];
+  const nearZ = [NET_Z * 0.3, NET_Z * 0.76, NET_Z * 0.66];
   const x = xs[role];
   const z = side === -1 ? nearZ[role] : COURT_L - nearZ[role];
   return { x, z };

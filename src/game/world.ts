@@ -20,6 +20,8 @@ import {
   SPIKE_POWER,
   TEAM_SIZE,
   homePos,
+  ROLE_SETTER,
+  ROLE_SPIKER,
   POINTS_TO_WIN_SET,
   SETS_TO_WIN_MATCH,
   WIN_BY_TWO,
@@ -66,10 +68,13 @@ export class World {
   rallyCrossings = 0;
   longestRally = 0;
   banner = "";
+  lastPointReason = "";
 
   private ballSideSign: Side = -1;
   private touchSide: Side | null = null;
   private touches = 0;
+  private lastToucher: Fighter | null = null; // for the no-double-contact rule
+  private lastToucherBlocked = false; // a block doesn't count as a touch
   private aiPalette: Palette;
 
   constructor(
@@ -106,6 +111,8 @@ export class World {
     this.banner = immediate ? "" : "READY";
     this.touchSide = null;
     this.touches = 0;
+    this.lastToucher = null;
+    this.lastToucherBlocked = false;
     for (const f of this.allFighters()) f.reset();
     this.controlledIndex = server === -1 ? 0 : 1;
     if (immediate) this.tossServe();
@@ -114,11 +121,12 @@ export class World {
   private tossServe() {
     const team = this.server === -1 ? this.playerTeam : this.aiTeam;
     const srv = team[0];
-    // stand the server just inside the baseline
+    // step behind the endline (service zone) and toss the ball up
     const h = homePos(this.server, 0);
     srv.x = h.x;
-    srv.z = this.server === -1 ? 26 : COURT_L - 26;
-    this.ball.reset(srv.x, 130, srv.z);
+    srv.z = this.server === -1 ? -14 : COURT_L + 14;
+    this.ball.reset(srv.x, 120, srv.z);
+    this.ball.setVelocity(0, 120, 0); // gentle toss so there is a clear window
     this.ballSideSign = this.server;
     audio.play("whistle");
   }
@@ -270,12 +278,19 @@ export class World {
         this.ballSideSign = s as Side;
         this.touchSide = null;
         this.touches = 0;
+        this.lastToucher = null; // new possession — same player may play again
         this.rallyCrossings++;
         this.longestRally = Math.max(this.longestRally, this.rallyCrossings);
       }
     }
 
-    if (this.phase === "serve" && !this.ball.live && this.ball.y <= 0) this.tossServe();
+    // serve must be put in with a single attempt: a missed toss is a service fault
+    if (this.phase === "serve" && !this.ball.live && this.ball.y <= 0) {
+      this.effects.popup("SERVE FAULT", 480, 210, "#ff8a8a", true);
+      this.phase = "rally"; // so scorePoint registers
+      this.lastPointReason = "servefault:" + this.server;
+      this.scorePoint(this.server, false, this.ball.x, this.ball.z);
+    }
   }
 
   private handleBallEvent(e: ReturnType<Ball["update"]>[number]) {
@@ -292,6 +307,7 @@ export class World {
         break;
       case "floor":
         if (this.phase === "rally" && this.ball.live) {
+          this.lastPointReason = (e.inBounds ? "land:" : "out:") + e.side;
           this.scorePoint(e.side, e.inBounds, e.x, e.z);
         } else {
           audio.play("bounce");
@@ -313,6 +329,9 @@ export class World {
 
   private tryHit(f: Fighter) {
     if (!f.wantHit || !f.canHit() || !this.ball.active) return;
+    // no-double-contact: the player who made the last touch can't play it again
+    // (a block doesn't count). The touch simply doesn't register — a teammate must take it.
+    if (this.ball.live && this.lastToucher === f && !this.lastToucherBlocked) return;
     if (!this.canReach(f)) return;
     this.resolveHit(f);
   }
@@ -338,6 +357,15 @@ export class World {
     const comingOver = sign(this.ball.vz) === dirNet && Math.abs(this.ball.z - NET_Z) < 60;
     const isBlock = !f.onGround && nearNet && f.holdHit && comingOver;
     const isSpike = !f.onGround && nearNet && ballHigh;
+
+    // no-double-contact: the same player may not touch twice in a row (a block is exempt)
+    if (!serveHit && this.lastToucher === f && !this.lastToucherBlocked && !isBlock) {
+      const pr = project(f.x, f.y + 70, f.z);
+      this.effects.popup("DOUBLE!", pr.sx, pr.sy, "#ff6b6b");
+      this.lastPointReason = "double:" + f.side;
+      this.scorePoint(f.side, true, f.x, f.z);
+      return;
+    }
 
     let kind: Fighter["lastHitKind"] = "bump";
     let vx = 0;
@@ -371,11 +399,16 @@ export class World {
       vx *= rallyBoost;
       vz *= rallyBoost;
     } else {
-      // receive / set — pop up on OWN side toward the net for a teammate
-      kind = sideTouches >= 1 ? "set" : "bump";
-      const tx = clamp(f.x + aimX * 70, 40, COURT_W - 40);
-      const tz = NET_Z - dirNet * randRange(50, 100); // just in front of the net, our side
-      ({ vx, vy, vz } = this.solveTo(tx, tz, 0.82));
+      // receive / set — loft the ball toward a teammate so a DIFFERENT player plays next.
+      const isSet = sideTouches >= 1;
+      kind = isSet ? "set" : "bump";
+      const mate = this.teammate(f, isSet ? ROLE_SPIKER : ROLE_SETTER);
+      // aim at the mate but keep it well on our own side and give it airtime to arrive
+      const tx = clamp(mate.x + aimX * 40, 30, COURT_W - 30);
+      const zLo = f.side === -1 ? 30 : NET_Z + 30;
+      const zHi = f.side === -1 ? NET_Z - 30 : COURT_L - 30;
+      const tz = clamp(mate.z, zLo, zHi);
+      ({ vx, vy, vz } = this.solveTo(tx, tz, isSet ? 0.95 : 1.05));
     }
 
     // nudge out of the body a touch
@@ -401,12 +434,28 @@ export class World {
       if (this.touches > 3) {
         const pr = project(f.x, f.y + 70, f.z);
         this.effects.popup("OVER 3!", pr.sx, pr.sy, "#ff6b6b");
+        this.lastPointReason = "over3:" + f.side;
         this.scorePoint(f.side, true, f.x, f.z);
         return;
       }
     }
 
+    this.lastToucher = f;
+    this.lastToucherBlocked = isBlock;
     this.spawnHitFx(f, f.lastHitKind, perfect);
+  }
+
+  /** Pick a teammate to send the ball to (by role, else the one nearest the net). */
+  private teammate(f: Fighter, role: number): Fighter {
+    const team = f.side === -1 ? this.playerTeam : this.aiTeam;
+    const byRole = team.find((m) => m !== f && m.role === role);
+    if (byRole) return byRole;
+    let best: Fighter | null = null;
+    for (const m of team) {
+      if (m === f) continue;
+      if (!best || Math.abs(m.z - NET_Z) < Math.abs(best.z - NET_Z)) best = m;
+    }
+    return best ?? f;
   }
 
   private spawnHitFx(f: Fighter, kind: Fighter["lastHitKind"], perfect: boolean) {

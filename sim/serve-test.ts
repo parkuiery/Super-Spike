@@ -17,7 +17,7 @@ function solveTo(b: Ball, tx: number, tz: number, T: number) {
 function trySer(x: number, contactY: number, side: -1 | 1) {
   const dirNet = -side;
   const b = new Ball();
-  b.reset(x, contactY, side === -1 ? 26 : COURT_L - 26);
+  b.reset(x, contactY, side === -1 ? -14 : COURT_L + 14);
   b.live = true;
   const tx = Math.max(40, Math.min(COURT_W - 40, x));
   const tz = NET_Z + dirNet * 195;

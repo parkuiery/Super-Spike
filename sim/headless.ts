@@ -35,6 +35,7 @@ let maxSpeed = 0;
 let scoreEvents = 0;
 let prevTotal = 0;
 const phaseCounts: Record<string, number> = {};
+const reasons: Record<string, number> = {};
 
 for (let i = 0; i < FRAMES; i++) {
   world.update(dt, botIntent(world));
@@ -53,6 +54,7 @@ for (let i = 0; i < FRAMES; i++) {
   if (total > prevTotal) {
     scoreEvents++;
     prevTotal = total;
+    (reasons as any)[world.lastPointReason] = ((reasons as any)[world.lastPointReason] || 0) + 1;
   }
   if (world.matchWinner !== null) {
     console.log(`Match ended at frame ${i} (${(i / 60).toFixed(1)}s)`);
@@ -65,5 +67,6 @@ console.log("anomalies (NaN):", anomalies);
 console.log("score events:", scoreEvents);
 console.log("points:", world.points, "sets:", world.sets, "winner:", world.matchWinner);
 console.log("longest rally:", world.longestRally, "max speed:", maxSpeed.toFixed(0));
+console.log("point reasons:", reasons);
 console.log("phase frames:", phaseCounts);
 console.log(anomalies === 0 && scoreEvents > 0 ? "RESULT: PASS ✅" : "RESULT: FAIL ❌");

@@ -77,7 +77,8 @@ export class Fighter {
   }
 
   private zBounds(): [number, number] {
-    return this.side === -1 ? [12, NET_Z - 16] : [NET_Z + 16, COURT_L - 12];
+    // allow stepping behind the endline into the service zone
+    return this.side === -1 ? [-40, NET_Z - 16] : [NET_Z + 16, COURT_L + 40];
   }
 
   reset() {

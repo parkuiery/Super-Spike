@@ -79,7 +79,7 @@ export function drawTitle(ctx: Ctx, t: number, ballY: number) {
 
   ctx.fillStyle = "rgba(234,241,255,0.8)";
   ctx.font = "20px Rajdhani, sans-serif";
-  ctx.fillText("3 vs 3 아케이드 배구 · The Spike 오마주", VIEW_W / 2, 320);
+  ctx.fillText("3 vs 3 아케이드 배구", VIEW_W / 2, 320);
 
   // prompt blink
   const a = 0.5 + Math.sin(t * 4) * 0.5;
